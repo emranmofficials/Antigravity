@@ -13,8 +13,21 @@ import id.vern.antigravity.util.AppUpdateState
 import id.vern.antigravity.util.UpdateChecker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.util.concurrent.ConcurrentHashMap
 
 object CoreUpdateDelegate {
+
+    /**
+     * CoreEngineUpdateState is owned by AntigravityViewModel, so the manifest digest is
+     * cached here between the check and apply steps instead of changing that model.
+     */
+    private val sha512ByRelease = ConcurrentHashMap<String, String>()
+
+    private fun releaseKey(version: String, url: String): String = "$version\u0000$url"
+
+    /** Returns the cached manifest SHA-512 for a release, or an empty string. */
+    fun getCachedSha512(version: String, url: String): String =
+        sha512ByRelease[releaseKey(version, url)] ?: ""
 
     suspend fun checkForOtaUpdates(context: Context, isManualCheck: Boolean): AppUpdateState? {
         return try {
@@ -67,12 +80,16 @@ object CoreUpdateDelegate {
         val current = CoreUpdateManager.getCurrentVersion(context)
         return try {
             val updateInfo = CoreUpdateManager.checkForUpdate(context)
+            if (updateInfo.sha512.isNotBlank()) {
+                sha512ByRelease[releaseKey(updateInfo.version, updateInfo.url)] = updateInfo.sha512
+            }
             CoreEngineUpdateState(
                 isChecking = false,
                 currentVersion = current,
                 latestVersion = updateInfo.version,
                 isUpdateAvailable = updateInfo.isUpdateAvailable,
                 downloadUrl = updateInfo.url,
+                sha512 = updateInfo.sha512,
                 lastCheckedTime = System.currentTimeMillis(),
                 error = null
             )
@@ -98,6 +115,7 @@ object CoreUpdateDelegate {
         val updateInfo = CoreUpdateInfo(
             version = latestVer,
             url = url,
+            sha512 = state.sha512.ifBlank { getCachedSha512(latestVer, url) },
             currentVersion = state.currentVersion,
             isUpdateAvailable = true
         )

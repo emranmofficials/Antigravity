@@ -9,16 +9,22 @@ import android.os.BatteryManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.system.Os
 import android.util.Log
 import android.widget.Toast
 import id.vern.antigravity.service.WakeLockHolder
 import org.json.JSONObject
 import java.io.BufferedReader
+import java.io.File
 import java.io.InputStreamReader
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.security.MessageDigest
+import java.security.SecureRandom
+import java.util.Base64
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicReference
 
 class SystemGatewayServer(
     private val context: Context,
@@ -27,6 +33,75 @@ class SystemGatewayServer(
 ) {
     companion object {
         private const val TAG = "SystemGateway"
+        const val TOKEN_FILE_NAME = ".gateway_token"
+        const val TOKEN_HEADER = "X-Agy-Gateway-Token"
+
+        private val knownToken = AtomicReference<String?>(null)
+
+        /** Stable per-install secret. Settings can display/copy the returned value. */
+        @Synchronized
+        fun getOrCreateToken(context: Context): String {
+            val appContext = context.applicationContext
+            knownToken.get()?.takeIf { it.length >= 32 }?.let { return it }
+
+            val tokenFile = File(appContext.filesDir, TOKEN_FILE_NAME)
+            val existing = if (tokenFile.isFile) {
+                try { tokenFile.readText(Charsets.UTF_8).trim() } catch (e: Exception) { "" }
+            } else ""
+            if (existing.length >= 32) {
+                knownToken.set(existing)
+                return existing
+            }
+
+            val bytes = ByteArray(32)
+            SecureRandom().nextBytes(bytes)
+            val token = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
+            var tempFile: File? = null
+            try {
+                tempFile = File.createTempFile(TOKEN_FILE_NAME, ".tmp", appContext.filesDir)
+                tempFile.writeText(token, Charsets.UTF_8)
+                makeOwnerOnly(tempFile)
+                if (tokenFile.exists() && !tokenFile.delete()) {
+                    Log.w(TAG, "Could not replace stale gateway token file")
+                }
+                if (!tempFile.renameTo(tokenFile)) {
+                    tempFile.copyTo(tokenFile, overwrite = true)
+                }
+                makeOwnerOnly(tokenFile)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed persisting gateway token: ${e.message}")
+            } finally {
+                tempFile?.let { if (it.exists()) it.delete() }
+            }
+            knownToken.set(token)
+            return token
+        }
+
+        /** Constant-time comparison; returns false until the token has been loaded. */
+        fun isValidToken(token: String?): Boolean {
+            if (token.isNullOrBlank()) return false
+            val expected = knownToken.get() ?: return false
+            return MessageDigest.isEqual(
+                expected.toByteArray(Charsets.UTF_8),
+                token.trim().toByteArray(Charsets.UTF_8)
+            )
+        }
+
+        private fun makeOwnerOnly(file: File) {
+            try {
+                file.setReadable(true, true)
+                file.setWritable(true, true)
+                file.setExecutable(false, false)
+                Os.chmod(file.absolutePath, 384) // 0600
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not set gateway token file permissions: ${e.message}")
+            }
+        }
+    }
+
+    init {
+        // Ensures the token exists and is in memory before any socket is accepted.
+        getOrCreateToken(context.applicationContext)
     }
 
     private val executor = Executors.newFixedThreadPool(3)
@@ -34,6 +109,8 @@ class SystemGatewayServer(
     private var serverSocket: ServerSocket? = null
     @Volatile
     private var running = false
+
+    fun isRunning(): Boolean = running
 
     @Synchronized
     fun start() {
@@ -44,7 +121,7 @@ class SystemGatewayServer(
             try {
                 val socket = ServerSocket(port, 10, InetAddress.getByName("127.0.0.1"))
                 serverSocket = socket
-                Log.i(TAG, "Gateway server listening on 127.0.0.1:$port")
+                Log.i(TAG, "Gateway server listening on 127.0.0.1:$port (token required)")
 
                 while (running && !socket.isClosed) {
                     try {
@@ -56,6 +133,7 @@ class SystemGatewayServer(
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Could not bind gateway on $port: ${e.message}")
+                running = false
             }
         }
     }
@@ -72,15 +150,27 @@ class SystemGatewayServer(
     private fun handleClient(socket: Socket) {
         socket.use { client ->
             try {
+                if (!client.inetAddress.isLoopbackAddress) {
+                    writeResponse(client, 403, JSONObject().put("ok", false).put("error", "loopback-only"))
+                    return
+                }
+
                 val reader = BufferedReader(InputStreamReader(client.getInputStream(), Charsets.UTF_8))
                 val firstLine = reader.readLine() ?: return
                 val parts = firstLine.split(" ")
                 val method = parts.getOrNull(0) ?: "GET"
                 val rawPath = parts.getOrNull(1) ?: "/"
 
+                val headers = HashMap<String, String>()
                 var contentLength = 0
                 var headerLine = reader.readLine()
                 while (!headerLine.isNullOrEmpty()) {
+                    val idx = headerLine.indexOf(':')
+                    if (idx > 0) {
+                        val key = headerLine.substring(0, idx).trim().lowercase()
+                        val value = headerLine.substring(idx + 1).trim()
+                        if (!headers.containsKey(key)) headers[key] = value
+                    }
                     if (headerLine.startsWith("Content-Length:", ignoreCase = true)) {
                         contentLength = headerLine.substringAfter(":").trim().toIntOrNull() ?: 0
                     }
@@ -98,23 +188,41 @@ class SystemGatewayServer(
                     String(buffer, 0, read)
                 } else ""
 
+                val suppliedToken = headers[TOKEN_HEADER.lowercase()]
+                    ?: headers["authorization"]?.removePrefix("Bearer ")?.removePrefix("bearer ")?.trim()
+                if (!isValidToken(suppliedToken)) {
+                    Log.w(TAG, "Rejected unauthenticated gateway request: $method $rawPath")
+                    writeResponse(client, 401, JSONObject().put("ok", false).put("error", "unauthorized"))
+                    return
+                }
+
                 val responseJson = dispatch(rawPath, body)
-                val responseBytes = responseJson.toString().toByteArray(Charsets.UTF_8)
-
-                val out = client.getOutputStream()
-                val header = "HTTP/1.1 200 OK\r\n" +
-                        "Content-Type: application/json; charset=utf-8\r\n" +
-                        "Content-Length: ${responseBytes.size}\r\n" +
-                        "Connection: close\r\n" +
-                        "\r\n"
-
-                out.write(header.toByteArray(Charsets.UTF_8))
-                out.write(responseBytes)
-                out.flush()
+                writeResponse(client, 200, responseJson)
             } catch (e: Exception) {
                 Log.w(TAG, "Gateway client handle error: ${e.message}")
             }
         }
+    }
+
+    private fun writeResponse(socket: Socket, statusCode: Int, json: JSONObject) {
+        val responseBytes = json.toString().toByteArray(Charsets.UTF_8)
+        val reason = when (statusCode) {
+            200 -> "OK"
+            401 -> "Unauthorized"
+            403 -> "Forbidden"
+            else -> "Error"
+        }
+        val header = "HTTP/1.1 $statusCode $reason\r\n" +
+                "Content-Type: application/json; charset=utf-8\r\n" +
+                "Content-Length: ${responseBytes.size}\r\n" +
+                "Cache-Control: no-store\r\n" +
+                "Connection: close\r\n" +
+                "\r\n"
+
+        val out = socket.getOutputStream()
+        out.write(header.toByteArray(Charsets.UTF_8))
+        out.write(responseBytes)
+        out.flush()
     }
 
     private fun dispatch(path: String, body: String): JSONObject {
@@ -187,4 +295,3 @@ class SystemGatewayServer(
         return result
     }
 }
-

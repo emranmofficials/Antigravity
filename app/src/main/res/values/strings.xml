@@ -643,5 +643,79 @@
     <string name="model_toast_requires_pro">%1$s requires a Google AI Pro subscription</string>
     <string name="model_toast_requires_ultra">%1$s requires a Google AI Ultra subscription</string>
     <string name="workspace_label">Workspace: %1$s</string>
+
+    <!-- Resilience, safety and diagnostics additions -->
+    <string name="settings_start_on_boot_title">Start engine on boot</string>
+    <string name="settings_start_on_boot_desc">Restart the local engine automatically after the device reboots.</string>
+    <string name="settings_skip_permissions_title">Skip tool permission prompts</string>
+    <string name="settings_skip_permissions_desc">Let the agent run shell commands without asking. Turn this off for a safer workflow.</string>
+    <string name="settings_gateway_token_title">Local gateway token</string>
+    <string name="settings_gateway_token_desc">Required for external requests to the localhost automation gateway. Never share it.</string>
+    <string name="settings_gateway_token_copy">Copy token</string>
+    <string name="settings_gateway_token_copied">Gateway token copied</string>
+    <string name="settings_core_status_title">Engine health</string>
+    <string name="settings_core_status_value">Daemon: %1$s · Gateway: %2$s</string>
+    <string name="settings_status_running">Running</string>
+    <string name="settings_status_stopped">Stopped</string>
+    <string name="settings_status_starting">Starting</string>
+    <string name="settings_status_unknown">Unknown</string>
+    <string name="settings_core_rollback_title">Roll back core update</string>
+    <string name="settings_core_rollback_desc">Restore the previous engine binary if the latest update caused problems.</string>
+    <string name="settings_core_rollback_button">Roll back</string>
+    <string name="settings_core_rollback_confirm_title">Roll back core?</string>
+    <string name="settings_core_rollback_confirm_message">The previously installed engine will be restored. Continue?</string>
+    <string name="settings_core_rollback_success">Core rolled back successfully</string>
+    <string name="settings_core_rollback_failure">Rollback failed: %1$s</string>
+    <string name="settings_offline_badge">Offline</string>
+    <string name="settings_last_updated">Last updated: %1$s</string>
+    <string name="settings_never_updated">Not updated yet</string>
+    <string name="settings_offline_hint">You are offline. Cached data is shown; live quota and model lists are unavailable.</string>
+    <string name="settings_permission_requesters_title">Permission shortcuts</string>
+    <string name="settings_permission_notifications">Notifications</string>
+    <string name="settings_permission_battery">Battery optimization</string>
+    <string name="settings_permission_install">Install unknown apps</string>
+    <string name="settings_permission_open">Open settings</string>
+    <string name="settings_crash_banner_title">Previous crash detected</string>
+    <string name="settings_crash_banner_desc">A log from the last unexpected shutdown is available.</string>
+    <string name="settings_crash_banner_view">View log</string>
+    <string name="settings_crash_banner_dismiss">Dismiss</string>
+    <string name="chat_jump_to_latest">Jump to latest</string>
+    <string name="file_search_hint">Filter files…</string>
+    <string name="file_rename_action">Rename</string>
+    <string name="file_rename_title">Rename file</string>
+    <string name="file_copy_path">Copy path</string>
+    <string name="file_show_hidden">Show hidden files</string>
+
+    <!-- Models &amp; usage -->
+    <string name="settings_models_usage_title">Models &amp; Usage</string>
+    <string name="settings_models_usage_signin_subtitle">Manage your model quota and account.</string>
+    <string name="settings_models_usage_credits_subtitle">Manage your model quota and credits.</string>
+    <string name="settings_models_signin_required_title">Sign In Required</string>
+    <string name="settings_models_signin_required_desc">Connect your Google account with OAuth 2.0 to access Gemini models, synchronize live usage, and view model quotas.</string>
+    <string name="settings_models_refreshing_toast">Refreshing live quota…</string>
+    <string name="settings_models_fetching_quota">Fetching live model quota from Google Cloud Code…</string>
+    <string name="settings_quota_unavailable_title">Quota Unavailable</string>
+    <string name="settings_quota_unavailable_desc">Check your connection or sign-in state.</string>
+    <string name="settings_plan_title">Plan</string>
+    <string name="settings_plan_your_plan">Your Plan: %1$s</string>
+    <string name="settings_model_credits_title">Model Credits</string>
+    <string name="settings_credit_overages_title">Enable AI Credit Overages</string>
+    <string name="settings_credit_overages_desc">When enabled, Antigravity uses your AI credits once the model quota is exhausted. Model quota is always used first.</string>
+    <string name="settings_no_quota_info">No quota information available for this account.</string>
+    <string name="settings_models_providers_title">Models &amp; Providers</string>
+    <string name="settings_provider_models_format">%1$s Models</string>
+
+    <!-- Change review -->
+    <string name="review_accept">Accept</string>
+    <string name="review_stage">Stage</string>
+    <string name="review_discard">Discard</string>
+    <string name="review_accepted">Accepted</string>
+    <string name="review_discard_title">Discard changes?</string>
+
+    <!-- Editor preferences -->
+    <string name="settings_editor_title">Code Editor</string>
+    <string name="settings_editor_word_wrap">Word wrap</string>
+    <string name="settings_editor_line_numbers">Show line numbers</string>
+    <string name="settings_editor_font_size">Font size: %1$d sp</string>
 </resources>
 

@@ -1,5 +1,9 @@
 package id.vern.antigravity.ui.components
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -19,13 +23,18 @@ import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.NoteAdd
 import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
@@ -36,6 +45,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,6 +55,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -55,13 +66,16 @@ import id.vern.antigravity.data.ProjectFile
 import id.vern.antigravity.ui.theme.AntigravityAmber
 import id.vern.antigravity.ui.theme.AntigravityBlue
 import id.vern.antigravity.ui.theme.AntigravityGreen
+import id.vern.antigravity.ui.theme.AntigravityRed
 import java.io.File
 
 @Composable
 fun FileTree(
     rootDirectory: File,
     onFileSelected: (File) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    showHiddenFiles: Boolean = false,
+    gitStatusForPath: ((File) -> String?)? = null
 ) {
     var expandedDirs by remember { mutableStateOf(setOf<String>()) }
     var refreshTrigger by remember { mutableStateOf(0) }
@@ -70,15 +84,47 @@ fun FileTree(
     var targetParentDir by remember { mutableStateOf(rootDirectory) }
     var newItemName by remember { mutableStateOf("") }
     var fileToDelete by remember { mutableStateOf<File?>(null) }
+    var fileToRename by remember { mutableStateOf<File?>(null) }
+    var renameText by remember { mutableStateOf("") }
+    var renameError by remember { mutableStateOf<String?>(null) }
+    var searchQuery by remember(rootDirectory) { mutableStateOf("") }
+    var hiddenFilesVisible by remember(rootDirectory) { mutableStateOf(showHiddenFiles) }
+    val context = LocalContext.current
+
+    LaunchedEffect(showHiddenFiles) { hiddenFilesVisible = showHiddenFiles }
+
+    val query = searchQuery.trim()
+
+    fun directoryHasMatch(dir: File, depth: Int): Boolean {
+        if (depth >= 8) return false
+        val children = try {
+            dir.listFiles()
+        } catch (_: Exception) {
+            null
+        } ?: return false
+        return children.any { child ->
+            (hiddenFilesVisible || !child.name.startsWith(".")) &&
+                (child.name.contains(query, ignoreCase = true) ||
+                    (child.isDirectory && directoryHasMatch(child, depth + 1)))
+        }
+    }
+
+    fun isVisible(file: File): Boolean {
+        if (!hiddenFilesVisible && file.name.startsWith(".")) return false
+        if (query.isEmpty()) return true
+        return file.name.contains(query, ignoreCase = true) ||
+            (file.isDirectory && directoryHasMatch(file, 0))
+    }
 
     fun loadFiles(dir: File): List<ProjectFile> {
         if (!dir.exists() || !dir.isDirectory) return emptyList()
         val list = dir.listFiles() ?: return emptyList()
-        return list.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
+        return list.filter { isVisible(it) }
+            .sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
             .map { file ->
                 val isDir = file.isDirectory
                 val path = file.absolutePath
-                val isExp = expandedDirs.contains(path)
+                val isExp = expandedDirs.contains(path) || query.isNotEmpty()
                 ProjectFile(
                     name = file.name,
                     file = file,
@@ -91,8 +137,18 @@ fun FileTree(
             }
     }
 
-    val fileItems = remember(rootDirectory, expandedDirs, refreshTrigger) {
+    val fileItems = remember(rootDirectory, expandedDirs, refreshTrigger, query, hiddenFilesVisible) {
         loadFiles(rootDirectory)
+    }
+
+    fun copyPath(file: File) {
+        try {
+            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+            if (clipboard != null) {
+                clipboard.setPrimaryClip(ClipData.newPlainText("Path", file.absolutePath))
+                Toast.makeText(context, context.getString(R.string.chat_copied), Toast.LENGTH_SHORT).show()
+            }
+        } catch (_: Exception) {}
     }
 
     Column(modifier = modifier) {
@@ -100,62 +156,93 @@ fun FileTree(
             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
             modifier = Modifier.fillMaxWidth()
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = rootDirectory.name.ifEmpty { stringResource(R.string.file_manager_title) },
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary
-                )
+            Column {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = rootDirectory.name.ifEmpty { stringResource(R.string.file_manager_title) },
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
 
-                Row {
-                    IconButton(
-                        onClick = {
-                            targetParentDir = rootDirectory
-                            newItemName = ""
-                            showNewFileDialog = true
-                        },
-                        modifier = Modifier.size(36.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.NoteAdd,
-                            contentDescription = stringResource(R.string.file_manager_new_file),
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
+                    Row {
+                        IconButton(
+                            onClick = {
+                                targetParentDir = rootDirectory
+                                newItemName = ""
+                                showNewFileDialog = true
+                            },
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.NoteAdd,
+                                contentDescription = stringResource(R.string.file_manager_new_file),
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
 
-                    IconButton(
-                        onClick = {
-                            targetParentDir = rootDirectory
-                            newItemName = ""
-                            showNewFolderDialog = true
-                        },
-                        modifier = Modifier.size(36.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.CreateNewFolder,
-                            contentDescription = stringResource(R.string.file_manager_new_folder),
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
+                        IconButton(
+                            onClick = {
+                                targetParentDir = rootDirectory
+                                newItemName = ""
+                                showNewFolderDialog = true
+                            },
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.CreateNewFolder,
+                                contentDescription = stringResource(R.string.file_manager_new_folder),
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
 
-                    IconButton(
-                        onClick = { refreshTrigger++ },
-                        modifier = Modifier.size(36.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Refresh,
-                            contentDescription = stringResource(R.string.file_manager_refresh),
-                            modifier = Modifier.size(18.dp)
-                        )
+                        IconButton(
+                            onClick = { hiddenFilesVisible = !hiddenFilesVisible },
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (hiddenFilesVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                contentDescription = if (hiddenFilesVisible) "Hide hidden files" else stringResource(R.string.file_show_hidden),
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+
+                        IconButton(
+                            onClick = { refreshTrigger++ },
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = stringResource(R.string.file_manager_refresh),
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
                     }
                 }
+
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    label = { Text(stringResource(R.string.file_search_hint)) },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Default.Search,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    },
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 4.dp)
+                )
             }
         }
 
@@ -167,7 +254,7 @@ fun FileTree(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
-                    text = stringResource(R.string.file_manager_empty),
+                    text = if (query.isNotEmpty()) "No matching files" else stringResource(R.string.file_manager_empty),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -186,7 +273,14 @@ fun FileTree(
                             }
                         },
                         onFileClick = onFileSelected,
-                        onDeleteClick = { fileToDelete = it.file }
+                        onDeleteClick = { fileToDelete = it.file },
+                        onRenameClick = { file ->
+                            fileToRename = file.file
+                            renameText = file.name
+                            renameError = null
+                        },
+                        onCopyPathClick = { copyPath(it) },
+                        gitStatusForPath = gitStatusForPath
                     )
                 }
             }
@@ -269,6 +363,78 @@ fun FileTree(
         )
     }
 
+    fileToRename?.let { file ->
+        AlertDialog(
+            onDismissRequest = {
+                fileToRename = null
+                renameError = null
+            },
+            properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier.widthIn(max = 380.dp).fillMaxWidth(0.92f).wrapContentHeight(),
+            title = {
+                DialogBlurEffect()
+                Text(stringResource(R.string.file_rename_title))
+            },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = renameText,
+                        onValueChange = {
+                            renameText = it
+                            renameError = null
+                        },
+                        label = { Text("New name") },
+                        singleLine = true,
+                        isError = renameError != null,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    renameError?.let { error ->
+                        Text(
+                            text = error,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    shape = RoundedCornerShape(8.dp),
+                    onClick = {
+                        val name = renameText.trim()
+                        when {
+                            name.isBlank() -> renameError = "Name cannot be empty"
+                            name.contains('/') || name.contains('\\') -> renameError = "Invalid name"
+                            else -> {
+                                val parent = file.parentFile ?: rootDirectory
+                                val target = File(parent, name)
+                                if (target.exists() && target.absolutePath != file.absolutePath) {
+                                    renameError = "A file with that name already exists"
+                                } else if (file.renameTo(target)) {
+                                    fileToRename = null
+                                    renameError = null
+                                    refreshTrigger++
+                                } else {
+                                    renameError = "Rename failed"
+                                }
+                            }
+                        }
+                    }
+                ) { Text(stringResource(R.string.editor_btn_save)) }
+            },
+            dismissButton = {
+                TextButton(
+                    shape = RoundedCornerShape(8.dp),
+                    onClick = {
+                        fileToRename = null
+                        renameError = null
+                    }
+                ) { Text(stringResource(R.string.btn_cancel)) }
+            }
+        )
+    }
+
     fileToDelete?.let { file ->
         AlertDialog(
             onDismissRequest = { fileToDelete = null },
@@ -303,9 +469,13 @@ private fun FileTreeItem(
     depth: Int,
     onToggleExpand: (String) -> Unit,
     onFileClick: (File) -> Unit,
-    onDeleteClick: (ProjectFile) -> Unit
+    onDeleteClick: (ProjectFile) -> Unit,
+    onRenameClick: (ProjectFile) -> Unit,
+    onCopyPathClick: (File) -> Unit,
+    gitStatusForPath: ((File) -> String?)? = null
 ) {
     val paddingStart = (depth * 16 + 8).dp
+    val gitStatus = gitStatusForPath?.invoke(item.file)?.trim()?.take(1)?.uppercase()
 
     Row(
         modifier = Modifier
@@ -318,7 +488,7 @@ private fun FileTreeItem(
                     onFileClick(item.file)
                 }
             }
-            .padding(start = paddingStart, end = 8.dp, top = 6.dp, bottom = 6.dp),
+            .padding(start = paddingStart, end = 4.dp, top = 6.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         if (item.isDirectory) {
@@ -357,12 +527,51 @@ private fun FileTreeItem(
             modifier = Modifier.weight(1f)
         )
 
+        if (!gitStatus.isNullOrEmpty()) {
+            Text(
+                text = gitStatus,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                color = when (gitStatus) {
+                    "A" -> AntigravityGreen
+                    "D", "!" -> AntigravityRed
+                    "?" -> AntigravityBlue
+                    else -> AntigravityAmber
+                },
+                modifier = Modifier.padding(end = 4.dp)
+            )
+        }
+
         if (!item.isDirectory && item.sizeBytes > 0) {
             Text(
                 text = item.formattedSize,
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                 fontSize = 10.sp
+            )
+        }
+
+        IconButton(
+            onClick = { onRenameClick(item) },
+            modifier = Modifier.size(22.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.Edit,
+                contentDescription = stringResource(R.string.file_rename_action),
+                modifier = Modifier.size(13.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+            )
+        }
+
+        IconButton(
+            onClick = { onCopyPathClick(item.file) },
+            modifier = Modifier.size(22.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.ContentCopy,
+                contentDescription = stringResource(R.string.file_copy_path),
+                modifier = Modifier.size(13.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
             )
         }
 
@@ -386,7 +595,10 @@ private fun FileTreeItem(
                 depth = depth + 1,
                 onToggleExpand = onToggleExpand,
                 onFileClick = onFileClick,
-                onDeleteClick = onDeleteClick
+                onDeleteClick = onDeleteClick,
+                onRenameClick = onRenameClick,
+                onCopyPathClick = onCopyPathClick,
+                gitStatusForPath = gitStatusForPath
             )
         }
     }
@@ -412,4 +624,3 @@ private fun getFileColor(ext: String): Color {
         else -> Color(0xFF94A3B8)
     }
 }
-

@@ -38,6 +38,13 @@ jobs:
         run: |
           echo "$KEYSTORE_BASE64" | base64 -d > app/KuatoDev.jks
 
+      - name: Run Unit Tests
+        run: ./gradlew testDebugUnitTest --stacktrace
+
+      - name: Run Android Lint
+        continue-on-error: true
+        run: ./gradlew lintDebug --stacktrace
+
       - name: Compile Release APK
         env:
           SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}

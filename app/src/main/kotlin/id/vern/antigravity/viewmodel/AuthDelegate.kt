@@ -19,6 +19,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 class AuthDelegate {
+    init {
+        Companion.registerForDeepLinks(this)
+    }
+
     private val mutableUserEmail = MutableStateFlow<String?>(null)
     val userEmail: StateFlow<String?> = mutableUserEmail.asStateFlow()
 
@@ -301,10 +305,29 @@ class AuthDelegate {
         onSignedOut: () -> Unit,
         onLog: (String, String) -> Unit
     ) {
+        // Remember which account is being signed out before the token files are cleared.
+        val signedOutEmail = OAuthManager.getUserEmail(context)
+            ?.takeIf { it.isNotBlank() }
+            ?: AccountManager.getActiveAccount(context)?.email
+
+        // Drop only the signed-out account; other accounts remain available for switching.
+        var removed = false
+        if (!signedOutEmail.isNullOrBlank()) {
+            removed = AccountManager.removeAccount(context, signedOutEmail)
+        }
+
+        // removeAccount may activate another account's token, so clear it again for an
+        // explicit sign-out while keeping the remaining accounts in the store.
         OAuthManager.clearToken(context)
+
+        mutableAccounts.value = AccountManager.getAccounts(context)
         mutableUserEmail.value = null
         mutableUserName.value = ""
         mutableUserPicture.value = null
+        mutableAuthError.value = null
+        mutablePendingAuthUrl.value = null
+        mutableShowGoogleSignInDialog.value = false
+        mutableIsAuthenticating.value = false
 
         val prefs = context.getSharedPreferences(AntigravityViewModel.PREFS_NAME, Context.MODE_PRIVATE)
         prefs.edit()
@@ -319,7 +342,118 @@ class AuthDelegate {
             .apply()
 
         onSignedOut()
-        onLog("Auth", "Signed out of Google account")
+        onLog(
+            "Auth",
+            if (removed) "Signed out of Google account and removed it from the account store"
+            else "Signed out of Google account"
+        )
         Toast.makeText(context, context.getString(R.string.account_toast_signed_out), Toast.LENGTH_SHORT).show()
+    }
+
+    private fun Uri.fragmentParameter(name: String): String? {
+        val fragment = fragment ?: return null
+        if (fragment.isBlank()) return null
+        return try {
+            Uri.parse("antigravity://fragment/?$fragment").getQueryParameter(name)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /** Parse and route an antigravity:// URI without assuming any particular host/path. */
+    fun handleDeepLink(
+        uri: Uri?,
+        onAuthCode: (String) -> Unit,
+        onAuthSuccess: (String?) -> Unit,
+        onAuthError: (String) -> Unit,
+        onWorkspaceRequested: () -> Unit,
+        onUnknownLink: ((String?) -> Unit)? = null
+    ): Boolean {
+        val raw = uri?.toString()
+        if (uri == null || !uri.scheme.equals("antigravity", ignoreCase = true)) {
+            onUnknownLink?.invoke(raw)
+            return false
+        }
+
+        fun param(name: String): String? =
+            uri.getQueryParameter(name)?.takeIf { it.isNotBlank() }
+                ?: uri.fragmentParameter(name)?.takeIf { it.isNotBlank() }
+
+        val error = param("error")
+        val code = param("code") ?: param("token")
+        val email = param("email")
+        var handled = false
+
+        if (!error.isNullOrBlank()) {
+            mutableAuthError.value = error
+            mutableIsAuthenticating.value = false
+            mutableShowGoogleSignInDialog.value = false
+            onAuthError(error)
+            handled = true
+        }
+
+        if (!code.isNullOrBlank()) {
+            mutableAuthError.value = null
+            mutablePendingAuthUrl.value = null
+            mutableShowGoogleSignInDialog.value = false
+            mutableIsAuthenticating.value = true
+            onAuthCode(code)
+            handled = true
+        } else if (!email.isNullOrBlank() && error.isNullOrBlank()) {
+            mutableAuthError.value = null
+            mutablePendingAuthUrl.value = null
+            mutableShowGoogleSignInDialog.value = false
+            mutableIsAuthenticating.value = false
+            mutableUserEmail.value = email
+            onAuthSuccess(email)
+            handled = true
+        }
+
+        val host = uri.host.orEmpty()
+        val path = uri.path.orEmpty()
+        val wantsWorkspace = host.equals("open", true) ||
+            host.equals("workspace", true) ||
+            host.equals("chat", true) ||
+            path.equals("/open", true) ||
+            path.contains("workspace", true) ||
+            path.contains("chat", true)
+        if (wantsWorkspace) {
+            onWorkspaceRequested()
+            handled = true
+        }
+
+        if (!handled) {
+            onUnknownLink?.invoke(raw)
+        }
+        return handled
+    }
+
+    companion object {
+        @Volatile
+        private var activeDelegate: AuthDelegate? = null
+
+        internal fun registerForDeepLinks(instance: AuthDelegate) {
+            activeDelegate = instance
+        }
+
+        /** Entry point used by MainActivity for both onCreate and onNewIntent. */
+        fun handleDeepLinkIntent(
+            intent: Intent?,
+            onAuthCode: (String) -> Unit,
+            onAuthSuccess: (String?) -> Unit,
+            onAuthError: (String) -> Unit,
+            onWorkspaceRequested: () -> Unit,
+            onUnknownLink: ((String?) -> Unit)? = null
+        ): Boolean {
+            val delegate = activeDelegate ?: AuthDelegate()
+            return delegate.handleDeepLink(
+                uri = intent?.data,
+                onAuthCode = onAuthCode,
+                onAuthSuccess = onAuthSuccess,
+                onAuthError = onAuthError,
+                onWorkspaceRequested = onWorkspaceRequested,
+                onUnknownLink = onUnknownLink
+            )
+        }
     }
 }

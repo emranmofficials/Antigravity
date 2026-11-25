@@ -7,6 +7,8 @@ import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
@@ -100,6 +102,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -138,6 +141,13 @@ import id.vern.antigravity.data.AvailableModelInfo
 import id.vern.antigravity.data.SubscriptionTierType
 import id.vern.antigravity.oauth.StoredAccount
 import id.vern.antigravity.ui.components.LogViewer
+import id.vern.antigravity.ui.CrashHandlerActivity
+import id.vern.antigravity.util.PermissionHelper
+import id.vern.antigravity.util.AppLogger
+import id.vern.antigravity.service.NetworkStateService
+import id.vern.antigravity.service.ServiceStatusService
+import id.vern.antigravity.gateway.SystemGatewayServer
+import id.vern.antigravity.install.CoreUpdateManager
 import id.vern.antigravity.ui.theme.AntigravityBlue
 import id.vern.antigravity.ui.theme.AntigravityGreen
 import id.vern.antigravity.ui.theme.AntigravityRed
@@ -151,6 +161,8 @@ import androidx.compose.ui.res.stringResource
 import id.vern.antigravity.R
 import kotlinx.coroutines.launch
 import java.io.File
+import java.util.Date
+import java.util.Locale
 
 enum class SettingsPage {
     MAIN,
@@ -964,6 +976,11 @@ fun GeneralSettingsPage(
     val securityPreset by viewModel.securityPreset.collectAsStateWithLifecycle()
     val planReviewPolicy by viewModel.planReviewPolicy.collectAsStateWithLifecycle()
     val permissionState by viewModel.permissionState.collectAsStateWithLifecycle()
+    val skipPermissions by viewModel.skipPermissions.collectAsStateWithLifecycle()
+    val startOnBoot by viewModel.startOnBoot.collectAsStateWithLifecycle()
+    val editorWordWrap by viewModel.editorWordWrap.collectAsStateWithLifecycle()
+    val editorLineNumbers by viewModel.editorLineNumbers.collectAsStateWithLifecycle()
+    val editorFontSize by viewModel.editorFontSize.collectAsStateWithLifecycle()
 
     var showSecurityMenu by remember { mutableStateOf(false) }
     var showPlanReviewMenu by remember { mutableStateOf(false) }
@@ -1041,6 +1058,114 @@ fun GeneralSettingsPage(
                                     }
                                 }
                             }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(20.dp))
+
+                    SettingsSectionTitle(title = stringResource(R.string.settings_section_core))
+                    SettingsCard {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                                    Text(
+                                        text = stringResource(R.string.settings_start_on_boot_title),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Text(
+                                        text = stringResource(R.string.settings_start_on_boot_desc),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Switch(
+                                    checked = startOnBoot,
+                                    onCheckedChange = { viewModel.setStartOnBoot(context, it) }
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(12.dp))
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.2f))
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                                    Text(
+                                        text = stringResource(R.string.settings_skip_permissions_title),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Text(
+                                        text = stringResource(R.string.settings_skip_permissions_desc),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Switch(
+                                    checked = skipPermissions,
+                                    onCheckedChange = { viewModel.setSkipPermissions(context, it) }
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(20.dp))
+
+                    SettingsSectionTitle(title = stringResource(R.string.settings_editor_title))
+                    SettingsCard {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.settings_editor_word_wrap),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.weight(1f).padding(end = 12.dp)
+                                )
+                                Switch(
+                                    checked = editorWordWrap,
+                                    onCheckedChange = { viewModel.setEditorWordWrap(context, it) }
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.settings_editor_line_numbers),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.weight(1f).padding(end = 12.dp)
+                                )
+                                Switch(
+                                    checked = editorLineNumbers,
+                                    onCheckedChange = { viewModel.setEditorLineNumbers(context, it) }
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Text(
+                                text = stringResource(R.string.settings_editor_font_size, editorFontSize),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Slider(
+                                value = editorFontSize.toFloat(),
+                                onValueChange = { viewModel.setEditorFontSize(context, it.toInt()) },
+                                valueRange = 8f..24f,
+                                steps = 8,
+                                modifier = Modifier.fillMaxWidth()
+                            )
                         }
                     }
 
@@ -1644,6 +1769,11 @@ fun ModelsAndUsageSettingsPage(
     val isQuotaLoading by viewModel.isQuotaLoading.collectAsStateWithLifecycle()
     val quotaErrorMessage by viewModel.quotaErrorMessage.collectAsStateWithLifecycle()
     val cliModels by viewModel.cliModels.collectAsStateWithLifecycle()
+    val isOnline by NetworkStateService.isOnlineFlow.collectAsStateWithLifecycle()
+
+    LaunchedEffect(Unit) {
+        NetworkStateService.register(context)
+    }
 
     LaunchedEffect(Unit, userEmail) {
         if (userEmail != null) {
@@ -1659,8 +1789,8 @@ fun ModelsAndUsageSettingsPage(
                 .padding(horizontal = 20.dp, vertical = 6.dp)
         ) {
             SubSheetHeader(
-                title = "Models & Usage",
-                subtitle = "Manage your model quota and account.",
+                title = stringResource(R.string.settings_models_usage_title),
+                subtitle = stringResource(R.string.settings_models_usage_signin_subtitle),
                 onBack = onBack
             )
 
@@ -1694,14 +1824,14 @@ fun ModelsAndUsageSettingsPage(
                         }
                         Spacer(modifier = Modifier.height(16.dp))
                         Text(
-                            text = "Sign In Required",
+                            text = stringResource(R.string.settings_models_signin_required_title),
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = "Connect your Google account with OAuth 2.0 to access Gemini models, synchronize live usage, and view model quotas.",
+                            text = stringResource(R.string.settings_models_signin_required_desc),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -1730,15 +1860,15 @@ fun ModelsAndUsageSettingsPage(
             .padding(horizontal = 20.dp, vertical = 6.dp)
     ) {
         SubSheetHeader(
-            title = "Models & Usage",
-            subtitle = "Manage your model quota and credits.",
+            title = stringResource(R.string.settings_models_usage_title),
+            subtitle = stringResource(R.string.settings_models_usage_credits_subtitle),
             onBack = onBack,
             trailingAction = {
                 IconButton(
                     onClick = {
                         viewModel.refreshUserQuota(context)
                         viewModel.refreshCliModels(context)
-                        Toast.makeText(context, "Refreshing live quota...", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, context.getString(R.string.settings_models_refreshing_toast), Toast.LENGTH_SHORT).show()
                     }
                 ) {
                     Icon(
@@ -1756,6 +1886,39 @@ fun ModelsAndUsageSettingsPage(
                 .verticalScroll(scrollState)
         ) {
 
+            if (!isOnline) {
+                SettingsCard {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Text(
+                            text = stringResource(R.string.settings_offline_badge),
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                        Text(
+                            text = stringResource(R.string.settings_offline_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+            }
+
+            val quotaUpdatedAt = id.vern.antigravity.service.CloudCodeQuotaService.lastUpdatedAt
+            val modelsUpdatedAt = AgyModelsService.lastUpdatedAt
+            if (quotaUpdatedAt > 0L || modelsUpdatedAt > 0L) {
+                Text(
+                    text = stringResource(
+                        R.string.settings_last_updated,
+                        java.text.SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(quotaUpdatedAt.coerceAtLeast(modelsUpdatedAt)))
+                    ),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 4.dp, bottom = 10.dp)
+                )
+            }
+
             if (isQuotaLoading && userQuotaSummary == null && codeAssistTier == null) {
                 Box(
                     modifier = Modifier
@@ -1771,7 +1934,7 @@ fun ModelsAndUsageSettingsPage(
                         )
                         Spacer(modifier = Modifier.height(12.dp))
                         Text(
-                            text = "Fetching live model quota from Google Cloud Code...",
+                            text = stringResource(R.string.settings_models_fetching_quota),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -1783,14 +1946,14 @@ fun ModelsAndUsageSettingsPage(
                 SettingsCard {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text(
-                            text = "Quota Unavailable",
+                            text = stringResource(R.string.settings_quota_unavailable_title),
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.error
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = quotaErrorMessage ?: "Check your connection or sign-in state.",
+                            text = quotaErrorMessage ?: stringResource(R.string.settings_quota_unavailable_desc),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -1816,7 +1979,7 @@ fun ModelsAndUsageSettingsPage(
                     codeAssistTier?.paidTier?.upgradeSubscriptionUri ?: ""
                 }
 
-                SettingsSectionTitle(title = "Plan")
+                SettingsSectionTitle(title = stringResource(R.string.settings_plan_title))
                 SettingsCard {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -1827,7 +1990,7 @@ fun ModelsAndUsageSettingsPage(
                     ) {
                         Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
                             Text(
-                                text = "Your Plan: $planName",
+                                text = stringResource(R.string.settings_plan_your_plan, planName),
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onSurface
@@ -1865,7 +2028,7 @@ fun ModelsAndUsageSettingsPage(
                 Spacer(modifier = Modifier.height(20.dp))
             }
 
-            SettingsSectionTitle(title = "Model Credits")
+            SettingsSectionTitle(title = stringResource(R.string.settings_model_credits_title))
             SettingsCard {
                 Column(modifier = Modifier.padding(14.dp)) {
                     Row(
@@ -1875,14 +2038,14 @@ fun ModelsAndUsageSettingsPage(
                     ) {
                         Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
                             Text(
-                                text = "Enable AI Credit Overages",
+                                text = stringResource(R.string.settings_credit_overages_title),
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             Spacer(modifier = Modifier.height(3.dp))
                             Text(
-                                text = "When toggled on, Antigravity will use your AI credits to fulfill model requests once you're out of model quota. Antigravity will always use your model quota first before using AI credits.",
+                                text = stringResource(R.string.settings_credit_overages_desc),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 lineHeight = 16.sp
@@ -1928,7 +2091,7 @@ fun ModelsAndUsageSettingsPage(
             } else if (!isQuotaLoading && quotaErrorMessage == null) {
                 SettingsCard {
                     Text(
-                        text = "No quota information available for this account.",
+                        text = stringResource(R.string.settings_no_quota_info),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(14.dp)
@@ -1984,7 +2147,7 @@ fun ModelsAndUsageSettingsPage(
                     .groupBy { it.provider }
 
                 if (modelsByProvider.isNotEmpty()) {
-                    SettingsSectionTitle(title = "Models & Providers")
+                    SettingsSectionTitle(title = stringResource(R.string.settings_models_providers_title))
                     SettingsCard {
                         Column(modifier = Modifier.padding(14.dp)) {
                             modelsByProvider.entries.forEachIndexed { pIdx, (provider, modelsList) ->
@@ -2008,7 +2171,7 @@ fun ModelsAndUsageSettingsPage(
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text(
-                                        text = "$provider Models",
+                                        text = stringResource(R.string.settings_provider_models_format, provider),
                                         style = MaterialTheme.typography.titleSmall,
                                         fontWeight = FontWeight.Bold,
                                         color = MaterialTheme.colorScheme.onSurface
@@ -3925,6 +4088,16 @@ fun DeveloperSettingsPage(
     val engineStatus by viewModel.engineStatus.collectAsStateWithLifecycle()
     val logs by viewModel.executionLogs.collectAsStateWithLifecycle()
     val scrollState = rememberScrollState()
+    val requestRuntimePermissions = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { /* permission state is refreshed on the next resume */ }
+    val serviceStatus by ServiceStatusService.status.collectAsStateWithLifecycle()
+    val rollbackAvailable by CoreUpdateManager.rollbackAvailable.collectAsStateWithLifecycle()
+    var showRollbackConfirm by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        CoreUpdateManager.hasRollbackBackup(context)
+    }
 
     Column(
         modifier = Modifier
@@ -4171,9 +4344,202 @@ fun DeveloperSettingsPage(
 
             Spacer(modifier = Modifier.height(20.dp))
 
+            SettingsSectionTitle(title = stringResource(R.string.settings_core_status_title))
+            SettingsCard {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Text(
+                        text = stringResource(
+                            R.string.settings_core_status_value,
+                            stringResource(if (serviceStatus.daemonRunning) R.string.settings_status_running else R.string.settings_status_stopped),
+                            stringResource(if (serviceStatus.gatewayRunning) R.string.settings_status_running else R.string.settings_status_stopped)
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = serviceStatus.summaryText(),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.2f))
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Text(
+                        text = stringResource(R.string.settings_gateway_token_title),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = stringResource(R.string.settings_gateway_token_desc),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = {
+                            val token = SystemGatewayServer.getOrCreateToken(context)
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                            clipboard?.setPrimaryClip(ClipData.newPlainText("gateway_token", token))
+                            Toast.makeText(context, R.string.settings_gateway_token_copied, Toast.LENGTH_SHORT).show()
+                        },
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(stringResource(R.string.settings_gateway_token_copy), fontSize = 12.sp)
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            SettingsSectionTitle(title = stringResource(R.string.settings_core_rollback_title))
+            SettingsCard {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Text(
+                        text = stringResource(R.string.settings_core_rollback_desc),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    OutlinedButton(
+                        onClick = { showRollbackConfirm = true },
+                        enabled = rollbackAvailable,
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(stringResource(R.string.settings_core_rollback_button), fontSize = 12.sp)
+                    }
+                }
+            }
+
+            if (showRollbackConfirm) {
+                AlertDialog(
+                    onDismissRequest = { showRollbackConfirm = false },
+                    title = { Text(stringResource(R.string.settings_core_rollback_confirm_title)) },
+                    text = { Text(stringResource(R.string.settings_core_rollback_confirm_message)) },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                val result = CoreUpdateManager.rollbackToBackup(context)
+                                showRollbackConfirm = false
+                                Toast.makeText(
+                                    context,
+                                    if (result.isSuccess) context.getString(R.string.settings_core_rollback_success)
+                                    else context.getString(R.string.settings_core_rollback_failure, result.exceptionOrNull()?.message.orEmpty()),
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        ) { Text(stringResource(R.string.settings_core_rollback_button)) }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showRollbackConfirm = false }) {
+                            Text(stringResource(R.string.common_cancel))
+                        }
+                    }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            SettingsSectionTitle(title = stringResource(R.string.settings_permission_requesters_title))
+            SettingsCard {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    OutlinedButton(
+                        onClick = { requestRuntimePermissions.launch(PermissionHelper.getRequiredRuntimePermissions()) },
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(stringResource(R.string.settings_permission_notifications))
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = { runCatching { context.startActivity(PermissionHelper.createBatteryOptimizationIntent(context)) } },
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(stringResource(R.string.settings_permission_battery))
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = {
+                            runCatching {
+                                context.startActivity(
+                                    Intent(
+                                        android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                        Uri.parse("package:${context.packageName}")
+                                    )
+                                )
+                            }
+                        },
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(stringResource(R.string.settings_permission_install))
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            val crashPrefs = remember {
+                context.getSharedPreferences("crash_recovery", Context.MODE_PRIVATE)
+            }
+            var pendingCrash by remember {
+                mutableStateOf(crashPrefs.getString("pending_crash_log", null))
+            }
+            if (!pendingCrash.isNullOrBlank()) {
+                SettingsCard {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Text(
+                            text = stringResource(R.string.settings_crash_banner_title),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                        Text(
+                            text = stringResource(R.string.settings_crash_banner_desc),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(
+                                onClick = { CrashHandlerActivity.start(context, pendingCrash.orEmpty()) },
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text(stringResource(R.string.settings_crash_banner_view), fontSize = 12.sp)
+                            }
+                            TextButton(
+                                onClick = {
+                                    CrashHandlerActivity.clearCrashLog(context)
+                                    pendingCrash = null
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text(stringResource(R.string.settings_crash_banner_dismiss), fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(20.dp))
+            }
+
             SettingsSectionTitle(title = stringResource(R.string.dev_terminal_logs_title))
             LogViewer(
                 logs = logs,
+                onClearLogs = { AppLogger.clearLogs() },
                 onCopyLogs = { viewModel.copyLogsToClipboard(context) },
                 onExportLogs = { viewModel.exportLogsToFile(context) }
             )

@@ -56,6 +56,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import id.vern.antigravity.R
 import id.vern.antigravity.ui.theme.AntigravityTheme
+import java.io.File
 import kotlin.system.exitProcess
 
 class CrashHandlerActivity : ComponentActivity() {
@@ -88,6 +89,10 @@ class CrashHandlerActivity : ComponentActivity() {
                         clipboard.setPrimaryClip(clip)
                         Toast.makeText(this, getString(R.string.crash_copied_toast), Toast.LENGTH_SHORT).show()
                     },
+                    onClear = {
+                        clearCrashLog(applicationContext)
+                        Toast.makeText(this, getString(R.string.settings_btn_clear_logs), Toast.LENGTH_SHORT).show()
+                    },
                     onClose = {
                         finishAffinity()
                         exitProcess(0)
@@ -107,6 +112,17 @@ class CrashHandlerActivity : ComponentActivity() {
             }
             context.startActivity(intent)
         }
+
+        /** Deletes both persisted copies of the crash report. */
+        fun clearCrashLog(context: Context) {
+            try {
+                File(context.filesDir, "crash.log").delete()
+            } catch (e: Exception) {}
+            try {
+                context.getSharedPreferences("crash_recovery", Context.MODE_PRIVATE)
+                    .edit().remove("pending_crash_log").commit()
+            } catch (e: Exception) {}
+        }
     }
 }
 
@@ -115,6 +131,7 @@ fun CrashDialogScreen(
     crashDetails: String,
     onRestart: () -> Unit,
     onCopy: () -> Unit,
+    onClear: () -> Unit,
     onClose: () -> Unit
 ) {
     Box(
@@ -253,6 +270,13 @@ fun CrashDialogScreen(
                                 fontWeight = FontWeight.Bold
                             )
                         }
+                    }
+
+                    TextButton(
+                        onClick = onClear,
+                        modifier = Modifier.align(Alignment.CenterHorizontally)
+                    ) {
+                        Text(text = stringResource(R.string.settings_btn_clear_logs))
                     }
 
                     TextButton(

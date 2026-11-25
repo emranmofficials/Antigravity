@@ -139,6 +139,9 @@ fun AgentDetailsBottomSheet(
     val openEditorTabs by viewModel.openEditorTabs.collectAsStateWithLifecycle()
     val activeEditorTabId by viewModel.activeEditorTabId.collectAsStateWithLifecycle()
     val activeEditorTab = openEditorTabs.find { it.id == activeEditorTabId }
+    val editorWordWrap by viewModel.editorWordWrap.collectAsStateWithLifecycle()
+    val editorLineNumbers by viewModel.editorLineNumbers.collectAsStateWithLifecycle()
+    val editorFontSize by viewModel.editorFontSize.collectAsStateWithLifecycle()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val workspacePath by viewModel.workspacePath.collectAsStateWithLifecycle()
     val projectList by viewModel.projectList.collectAsStateWithLifecycle()
@@ -1391,7 +1394,11 @@ fun AgentDetailsBottomSheet(
                                 viewModel.closeEditorTab(currentTab.id)
                             },
                             onToggleDiff = {},
-                            modifier = Modifier.fillMaxSize()
+                            modifier = Modifier.fillMaxSize(),
+                            fontSize = editorFontSize.toFloat(),
+                            wordWrap = editorWordWrap,
+                            lineNumbers = editorLineNumbers,
+                            onContentChanged = { content -> viewModel.updateEditorContent(currentTab.id, content) }
                         )
                     }
                 }

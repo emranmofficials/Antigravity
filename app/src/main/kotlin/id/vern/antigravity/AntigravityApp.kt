@@ -6,6 +6,7 @@ import android.content.Context
 import android.os.Process
 import android.util.Log
 import id.vern.antigravity.ui.CrashHandlerActivity
+import id.vern.antigravity.util.AppLogger
 import java.io.File
 import java.io.PrintWriter
 import java.io.StringWriter
@@ -46,15 +47,15 @@ class AntigravityApp : Application() {
         Thread.setDefaultUncaughtExceptionHandler { thread, exception ->
             val sw = StringWriter()
             exception.printStackTrace(PrintWriter(sw))
-            val rawTrace = sw.toString().trim()
+            val rawTrace = AppLogger.redact(sw.toString().trim())
             val time = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
 
             val crashDetails = buildString {
-                appendLine("[Aplikasi Terhenti (Force Close)]")
+                appendLine("[${getString(R.string.crash_title)}]")
                 appendLine("Timestamp: $time")
                 appendLine("Thread: ${thread.name}")
                 appendLine("Exception: ${exception.javaClass.name}")
-                appendLine("Message: ${exception.localizedMessage ?: "No message"}")
+                appendLine("Message: ${AppLogger.redact(exception.localizedMessage ?: "No message")}")
                 appendLine()
                 appendLine("Stack Trace:")
                 appendLine(rawTrace)

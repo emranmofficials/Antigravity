@@ -643,5 +643,79 @@
     <string name="model_toast_requires_pro">%1$s memerlukan langganan Google AI Pro</string>
     <string name="model_toast_requires_ultra">%1$s memerlukan langganan Google AI Ultra</string>
     <string name="workspace_label">Ruang Kerja: %1$s</string>
+
+    <!-- Ketahanan, keamanan, dan diagnostik -->
+    <string name="settings_start_on_boot_title">Jalankan engine saat boot</string>
+    <string name="settings_start_on_boot_desc">Mulai ulang engine lokal otomatis setelah perangkat dinyalakan.</string>
+    <string name="settings_skip_permissions_title">Lewati prompt izin alat</string>
+    <string name="settings_skip_permissions_desc">Izinkan agent menjalankan perintah shell tanpa bertanya. Matikan untuk alur kerja yang lebih aman.</string>
+    <string name="settings_gateway_token_title">Token gateway lokal</string>
+    <string name="settings_gateway_token_desc">Diperlukan untuk permintaan eksternal ke gateway otomasi localhost. Jangan bagikan.</string>
+    <string name="settings_gateway_token_copy">Salin token</string>
+    <string name="settings_gateway_token_copied">Token gateway disalin</string>
+    <string name="settings_core_status_title">Kesehatan engine</string>
+    <string name="settings_core_status_value">Daemon: %1$s · Gateway: %2$s</string>
+    <string name="settings_status_running">Berjalan</string>
+    <string name="settings_status_stopped">Berhenti</string>
+    <string name="settings_status_starting">Memulai</string>
+    <string name="settings_status_unknown">Tidak diketahui</string>
+    <string name="settings_core_rollback_title">Kembalikan update core</string>
+    <string name="settings_core_rollback_desc">Pulihkan binary engine sebelumnya jika update terakhir menyebabkan masalah.</string>
+    <string name="settings_core_rollback_button">Kembalikan</string>
+    <string name="settings_core_rollback_confirm_title">Kembalikan core?</string>
+    <string name="settings_core_rollback_confirm_message">Engine yang sebelumnya terpasang akan dipulihkan. Lanjutkan?</string>
+    <string name="settings_core_rollback_success">Core berhasil dikembalikan</string>
+    <string name="settings_core_rollback_failure">Gagal mengembalikan: %1$s</string>
+    <string name="settings_offline_badge">Luring</string>
+    <string name="settings_last_updated">Terakhir diperbarui: %1$s</string>
+    <string name="settings_never_updated">Belum pernah diperbarui</string>
+    <string name="settings_offline_hint">Anda sedang luring. Data tersimpan ditampilkan; kuota dan daftar model langsung tidak tersedia.</string>
+    <string name="settings_permission_requesters_title">Pintasan izin</string>
+    <string name="settings_permission_notifications">Notifikasi</string>
+    <string name="settings_permission_battery">Optimasi baterai</string>
+    <string name="settings_permission_install">Instal aplikasi unknown</string>
+    <string name="settings_permission_open">Buka pengaturan</string>
+    <string name="settings_crash_banner_title">Kerusakan sebelumnya terdeteksi</string>
+    <string name="settings_crash_banner_desc">Log dari kematian aplikasi terakhir tersedia.</string>
+    <string name="settings_crash_banner_view">Lihat log</string>
+    <string name="settings_crash_banner_dismiss">Abaikan</string>
+    <string name="chat_jump_to_latest">Lompat ke terbaru</string>
+    <string name="file_search_hint">Saring file…</string>
+    <string name="file_rename_action">Ubah nama</string>
+    <string name="file_rename_title">Ubah nama file</string>
+    <string name="file_copy_path">Salin jalur</string>
+    <string name="file_show_hidden">Tampilkan file tersembunyi</string>
+
+    <!-- Model &amp; penggunaan -->
+    <string name="settings_models_usage_title">Model &amp; Penggunaan</string>
+    <string name="settings_models_usage_signin_subtitle">Kelola kuota model dan akun Anda.</string>
+    <string name="settings_models_usage_credits_subtitle">Kelola kuota model dan kredit Anda.</string>
+    <string name="settings_models_signin_required_title">Perlu Masuk</string>
+    <string name="settings_models_signin_required_desc">Hubungkan akun Google Anda dengan OAuth 2.0 untuk mengakses model Gemini, menyinkronkan penggunaan langsung, dan melihat kuota model.</string>
+    <string name="settings_models_refreshing_toast">Menyegarkan kuota langsung…</string>
+    <string name="settings_models_fetching_quota">Mengambil kuota model langsung dari Google Cloud Code…</string>
+    <string name="settings_quota_unavailable_title">Kuota Tidak Tersedia</string>
+    <string name="settings_quota_unavailable_desc">Periksa koneksi atau status masuk Anda.</string>
+    <string name="settings_plan_title">Paket</string>
+    <string name="settings_plan_your_plan">Paket Anda: %1$s</string>
+    <string name="settings_model_credits_title">Kredit Model</string>
+    <string name="settings_credit_overages_title">Aktifkan Tambahan Kredit AI</string>
+    <string name="settings_credit_overages_desc">Jika aktif, Antigravity menggunakan kredit AI setelah kuota model habis. Kuota model selalu digunakan terlebih dahulu.</string>
+    <string name="settings_no_quota_info">Tidak ada informasi kuota untuk akun ini.</string>
+    <string name="settings_models_providers_title">Model &amp; Penyedia</string>
+    <string name="settings_provider_models_format">Model %1$s</string>
+
+    <!-- Tinjauan perubahan -->
+    <string name="review_accept">Terima</string>
+    <string name="review_stage">Simpan ke index</string>
+    <string name="review_discard">Buang</string>
+    <string name="review_accepted">Diterima</string>
+    <string name="review_discard_title">Buang perubahan?</string>
+
+    <!-- Preferensi editor -->
+    <string name="settings_editor_title">Editor Kode</string>
+    <string name="settings_editor_word_wrap">Bungkus kata</string>
+    <string name="settings_editor_line_numbers">Tampilkan nomor baris</string>
+    <string name="settings_editor_font_size">Ukuran font: %1$d sp</string>
 </resources>
 

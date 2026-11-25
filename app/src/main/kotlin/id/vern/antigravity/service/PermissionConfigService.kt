@@ -8,6 +8,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 
+enum class PermissionDefaultMode { ALLOW, ASK, DENY }
+
 data class PermissionRule(
     val action: String,
     val pattern: String,
@@ -16,11 +18,11 @@ data class PermissionRule(
 
 data class PermissionGrantsState(
     val rules: List<PermissionRule> = emptyList(),
-    val autoExecutionPolicy: String = "CASCADE_COMMANDS_AUTO_EXECUTION_EAGER",
+    val autoExecutionPolicy: String = "CASCADE_COMMANDS_AUTO_EXECUTION_ASK",
     val enableTerminalSandbox: Boolean = false,
-    val nonWorkspaceFileAccessPolicy: String = "AGENT_SETTING_POLICY_ALLOW",
-    val planReviewPolicy: String = "Always Proceed",
-    val securityPreset: String = "Turbo Mode"
+    val nonWorkspaceFileAccessPolicy: String = "AGENT_SETTING_POLICY_DENY",
+    val planReviewPolicy: String = "Always Ask",
+    val securityPreset: String = "Default"
 ) {
     fun getRulesForAction(action: String): List<PermissionRule> =
         rules.filter { it.action.equals(action, ignoreCase = true) }
@@ -44,7 +46,9 @@ data class PermissionGrantsState(
 object PermissionConfigService {
     private const val TAG = "PermissionConfig"
     private val GRANT_REGEX = Regex("^([^(]+)\\((.*)\\)$")
-    private val DEFAULT_HEADLESS_ALLOW_GRANTS = listOf(
+
+    /** Grants that older builds put in "allow" unconditionally. */
+    private val LEGACY_PERMISSIVE_GRANTS = listOf(
         "command(*)",
         "unsandboxed(*)",
         "read_file(*)",
@@ -53,6 +57,70 @@ object PermissionConfigService {
         "execute_url(*)",
         "mcp(*)"
     )
+    private val DEFAULT_ASK_GRANTS = listOf(
+        "command(*)",
+        "read_file(*)",
+        "write_file(*)",
+        "read_url(*)",
+        "mcp(*)"
+    )
+    private val DANGEROUS_ACTIONS = setOf("unsandboxed", "execute_url")
+
+    @Volatile
+    private var defaultMode: PermissionDefaultMode = PermissionDefaultMode.ASK
+
+    /** Settings can read this to show the active default. Defaults to ASK. */
+    fun getDefaultPermissionMode(): PermissionDefaultMode = defaultMode
+
+    /** Settings can toggle the default applied to grants with no explicit rule. */
+    @Synchronized
+    fun setDefaultPermissionMode(mode: PermissionDefaultMode) {
+        defaultMode = mode
+    }
+
+    /** ASK for normal tools, DENY for dangerous actions; ALLOW only when explicitly selected. */
+    fun defaultModeForAction(action: String): String = when (defaultMode) {
+        PermissionDefaultMode.ALLOW -> "allow"
+        PermissionDefaultMode.ASK -> if (action.lowercase() in DANGEROUS_ACTIONS) "deny" else "ask"
+        PermissionDefaultMode.DENY -> "deny"
+    }
+
+    private fun putGrant(
+        mode: String,
+        grant: String,
+        allowSet: LinkedHashSet<String>,
+        askSet: LinkedHashSet<String>,
+        denySet: LinkedHashSet<String>
+    ) {
+        allowSet.remove(grant)
+        askSet.remove(grant)
+        denySet.remove(grant)
+        when (mode.lowercase()) {
+            "allow" -> allowSet.add(grant)
+            "ask" -> askSet.add(grant)
+            "deny" -> denySet.add(grant)
+            else -> when (defaultModeForAction(grant.substringBefore("("))) {
+                "allow" -> allowSet.add(grant)
+                "ask" -> askSet.add(grant)
+                else -> denySet.add(grant)
+            }
+        }
+    }
+
+    private fun addDefaultGrants(
+        allowSet: LinkedHashSet<String>,
+        askSet: LinkedHashSet<String>,
+        denySet: LinkedHashSet<String>
+    ) {
+        for (grant in LEGACY_PERMISSIVE_GRANTS) {
+            val mode = if (grant in DEFAULT_ASK_GRANTS) {
+                if (defaultMode == PermissionDefaultMode.ALLOW) "allow" else defaultModeForAction(grant.substringBefore("("))
+            } else {
+                if (defaultMode == PermissionDefaultMode.ALLOW) "allow" else "deny"
+            }
+            putGrant(mode, grant, allowSet, askSet, denySet)
+        }
+    }
 
     private fun getCandidateFiles(context: Context): List<File> {
         val list = mutableListOf<File>()
@@ -81,19 +149,14 @@ object PermissionConfigService {
     }
 
     fun syncSettingsJsonFiles(context: Context, state: PermissionGrantsState = PermissionGrantsState()) {
-        val allowSet = linkedSetOf<String>()
-        allowSet.addAll(DEFAULT_HEADLESS_ALLOW_GRANTS)
-        val askSet = linkedSetOf<String>()
-        val denySet = linkedSetOf<String>()
+        val allowSet = LinkedHashSet<String>()
+        val askSet = LinkedHashSet<String>()
+        val denySet = LinkedHashSet<String>()
+        addDefaultGrants(allowSet, askSet, denySet)
 
         for (rule in state.rules) {
             val grantStr = "${rule.action}(${rule.pattern})"
-            when (rule.mode.lowercase()) {
-                "allow" -> allowSet.add(grantStr)
-                "ask" -> askSet.add(grantStr)
-                "deny" -> denySet.add(grantStr)
-                else -> allowSet.add(grantStr)
-            }
+            putGrant(rule.mode, grantStr, allowSet, askSet, denySet)
         }
 
         for (settingsFile in getCandidateSettingsFiles(context)) {
@@ -112,7 +175,14 @@ object PermissionConfigService {
                     if (existingAllow != null) {
                         for (i in 0 until existingAllow.length()) {
                             val item = existingAllow.optString(i, "").trim()
-                            if (item.isNotBlank()) allowSet.add(item)
+                            if (item.isBlank()) continue
+                            // Migrate legacy wildcard allows into the safer default bucket.
+                            if (item in LEGACY_PERMISSIVE_GRANTS) {
+                                val mode = defaultModeForAction(item.substringBefore("("))
+                                putGrant(mode, item, allowSet, askSet, denySet)
+                            } else {
+                                putGrant("allow", item, allowSet, askSet, denySet)
+                            }
                         }
                     }
                 }
@@ -133,7 +203,7 @@ object PermissionConfigService {
 
                 val userSettings = root.optJSONObject("userSettings") ?: JSONObject().also { root.put("userSettings", it) }
                 userSettings.put("autoExecutionPolicy", state.autoExecutionPolicy)
-                userSettings.put("enableTerminalSandbox", false)
+                userSettings.put("enableTerminalSandbox", state.enableTerminalSandbox)
                 userSettings.put("nonWorkspaceFileAccessPolicy", state.nonWorkspaceFileAccessPolicy)
                 userSettings.put("planReviewPolicy", state.planReviewPolicy)
                 userSettings.put("securityPreset", state.securityPreset)
@@ -162,11 +232,11 @@ object PermissionConfigService {
             val root = JSONObject(content)
             val userSettings = root.optJSONObject("userSettings") ?: JSONObject()
 
-            val autoExec = userSettings.optString("autoExecutionPolicy", "CASCADE_COMMANDS_AUTO_EXECUTION_EAGER")
+            val autoExec = userSettings.optString("autoExecutionPolicy", "CASCADE_COMMANDS_AUTO_EXECUTION_ASK")
             val sandbox = userSettings.optBoolean("enableTerminalSandbox", false)
-            val nonWorkspaceFile = userSettings.optString("nonWorkspaceFileAccessPolicy", "AGENT_SETTING_POLICY_ALLOW")
-            val planReview = userSettings.optString("planReviewPolicy", "Always Proceed")
-            val secPreset = userSettings.optString("securityPreset", "Turbo Mode")
+            val nonWorkspaceFile = userSettings.optString("nonWorkspaceFileAccessPolicy", "AGENT_SETTING_POLICY_DENY")
+            val planReview = userSettings.optString("planReviewPolicy", "Always Ask")
+            val secPreset = userSettings.optString("securityPreset", "Default")
 
             val rules = mutableListOf<PermissionRule>()
             val grantsObj = userSettings.optJSONObject("globalPermissionGrants")
@@ -229,23 +299,22 @@ object PermissionConfigService {
             userSettings.put("planReviewPolicy", state.planReviewPolicy)
             userSettings.put("securityPreset", state.securityPreset)
 
-            val allowSet = linkedSetOf<String>()
-            allowSet.addAll(DEFAULT_HEADLESS_ALLOW_GRANTS)
-            val askArr = JSONArray()
-            val denyArr = JSONArray()
+            val allowSet = LinkedHashSet<String>()
+            val askSet = LinkedHashSet<String>()
+            val denySet = LinkedHashSet<String>()
+            addDefaultGrants(allowSet, askSet, denySet)
 
             for (rule in state.rules) {
                 val grantStr = "${rule.action}(${rule.pattern})"
-                when (rule.mode.lowercase()) {
-                    "allow" -> allowSet.add(grantStr)
-                    "ask" -> askArr.put(grantStr)
-                    "deny" -> denyArr.put(grantStr)
-                    else -> allowSet.add(grantStr)
-                }
+                putGrant(rule.mode, grantStr, allowSet, askSet, denySet)
             }
 
             val allowArr = JSONArray()
             allowSet.forEach { allowArr.put(it) }
+            val askArr = JSONArray()
+            askSet.forEach { askArr.put(it) }
+            val denyArr = JSONArray()
+            denySet.forEach { denyArr.put(it) }
 
             val grantsObj = JSONObject()
             grantsObj.put("allow", allowArr)
@@ -272,4 +341,3 @@ object PermissionConfigService {
         }
     }
 }
-

@@ -312,8 +312,17 @@ class UpdateChecker(private val context: Context) {
         var downloading = true
         while (downloading) {
             val cursor = dm.query(DownloadManager.Query().setFilterById(downloadId))
-            if (cursor != null && cursor.moveToFirst()) {
-                val status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+            if (cursor == null || !cursor.moveToFirst()) {
+                // A null/empty cursor means the download row disappeared; never spin forever.
+                cursor?.close()
+                Log.w(TAG, "DownloadManager returned no row for id $downloadId; stopping progress tracking")
+                onState(AppUpdateState.Idle)
+                downloading = false
+                continue
+            }
+
+            cursor.use { c ->
+                val status = c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
                 when (status) {
                     DownloadManager.STATUS_SUCCESSFUL -> {
                         onState(AppUpdateState.ReadyToInstall(downloadId))
@@ -324,15 +333,14 @@ class UpdateChecker(private val context: Context) {
                         downloading = false
                     }
                     else -> {
-                        val downloaded = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
-                        val total = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
+                        val downloaded = c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
+                        val total = c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
                         if (total > 0) {
                             val progress = ((downloaded * 100L) / total).toInt()
                             onState(AppUpdateState.Downloading(progress))
                         }
                     }
                 }
-                cursor.close()
             }
             delay(300)
         }

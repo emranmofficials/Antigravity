@@ -95,6 +95,7 @@ data class CoreEngineUpdateState(
     val latestVersion: String? = null,
     val isUpdateAvailable: Boolean = false,
     val downloadUrl: String? = null,
+    val sha512: String = "",
     val lastCheckedTime: Long = 0L,
     val error: String? = null
 )
@@ -113,8 +114,31 @@ data class ConversationSummary(
     val timestamp: Long,
     val messageCount: Int,
     val isPinned: Boolean = false,
-    val projectPath: String? = null
+    val projectPath: String? = null,
+    /** Optional per-conversation tool-permission allowlist (relative paths). */
+    val allowedPaths: List<String> = emptyList()
 )
+
+private enum class GitChangeAction { ACCEPT, STAGE, RESTORE }
+
+/**
+ * Bridge used by [id.vern.antigravity.ui.components.ChatBubble] so existing call sites keep
+ * working without passing new callbacks. The ViewModel installs the handlers on init.
+ */
+object ChangeReviewActions {
+    @Volatile
+    var onAccept: ((List<String>) -> Unit)? = null
+
+    @Volatile
+    var onStage: ((List<String>) -> Unit)? = null
+
+    @Volatile
+    var onReject: ((List<String>) -> Unit)? = null
+
+    fun accept(paths: List<String>) { onAccept?.invoke(paths) }
+    fun stage(paths: List<String>) { onStage?.invoke(paths) }
+    fun reject(paths: List<String>) { onReject?.invoke(paths) }
+}
 
 data class CustomizationItem(
     val id: String,
@@ -233,6 +257,7 @@ class AntigravityViewModel : ViewModel() {
     val editorLineNumbers: StateFlow<Boolean> = settingsPreferencesDelegate.editorLineNumbers
     val editorFontSize: StateFlow<Int> = settingsPreferencesDelegate.editorFontSize
     val skipPermissions: StateFlow<Boolean> = settingsPreferencesDelegate.skipPermissions
+    val startOnBoot: StateFlow<Boolean> = settingsPreferencesDelegate.startOnBoot
     val queuedMessagesMode: StateFlow<String> = settingsPreferencesDelegate.queuedMessagesMode
     val securityPreset: StateFlow<String> = settingsPreferencesDelegate.securityPreset
     val planReviewPolicy: StateFlow<String> = settingsPreferencesDelegate.planReviewPolicy
@@ -328,6 +353,15 @@ class AntigravityViewModel : ViewModel() {
     private val convIdToCliSessionId = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     init {
+        try {
+            convIdToCliSessionId.putAll(ConversationPersistence.loadCliSessionMapping(AntigravityApp.instance))
+        } catch (e: Exception) {
+            Log.w("AntigravityViewModel", "Failed loading persisted CLI session map: ${e.message}")
+        }
+        val appContext: Context? = try { AntigravityApp.instance } catch (e: Exception) { null }
+        ChangeReviewActions.onAccept = { paths -> appContext?.let { acceptChangedFiles(it, paths) } }
+        ChangeReviewActions.onStage = { paths -> appContext?.let { stageChangedFiles(it, paths) } }
+        ChangeReviewActions.onReject = { paths -> appContext?.let { rejectChangedFiles(it, paths) } }
         AppLogger.setHandler { tag, message, isError ->
             val entry = ExecutionLogEntry(
                 tag = tag,
@@ -350,6 +384,7 @@ class AntigravityViewModel : ViewModel() {
                 }
             }
         }
+        AppLogger.setClearHandler { mutableExecutionLogs.value = emptyList() }
     }
 
     private val mutableEngineStatus = MutableStateFlow(EngineStatus())
@@ -537,6 +572,7 @@ class AntigravityViewModel : ViewModel() {
             onCliModelsDecoded = { mutableCliModels.value = it },
             onWorkspaceLoaded = { projectWorkspaceDelegate.setWorkspacePathDirect(it) }
         )
+        editorSessionDelegate.init(context)
         refreshAuthState(context)
         refreshPermissions(context)
         refreshRules(context)
@@ -582,6 +618,9 @@ class AntigravityViewModel : ViewModel() {
 
     fun setSkipPermissions(context: Context, skip: Boolean) =
         settingsPreferencesDelegate.setSkipPermissions(context, skip)
+
+    fun setStartOnBoot(context: Context, enabled: Boolean) =
+        settingsPreferencesDelegate.setStartOnBoot(context, enabled)
 
     fun setQueuedMessagesMode(context: Context, mode: String) =
         settingsPreferencesDelegate.setQueuedMessagesMode(context, mode, ::addLog)
@@ -773,17 +812,32 @@ class AntigravityViewModel : ViewModel() {
     fun setWorkspacePath(context: Context, path: String) = projectWorkspaceDelegate.setWorkspacePath(context, path, ::addLog)
 
     fun saveConversationHistory(context: Context) = conversationManagerDelegate.saveConversationHistory(context)
+
+    /** Persists the optional per-conversation tool-permission allowlist. */
+    fun setConversationAllowedPaths(context: Context, conversationId: String, paths: List<String>) {
+        conversationManagerDelegate.updateConversationHistoryDirect { list ->
+            list.map { if (it.id == conversationId) it.copy(allowedPaths = paths.distinct()) else it }
+        }
+        saveConversationHistory(context)
+    }
+
+    fun getConversationAllowedPaths(conversationId: String): List<String> =
+        conversationHistory.value.firstOrNull { it.id == conversationId }?.allowedPaths.orEmpty()
+
     fun saveLastActiveConversationId(context: Context, id: String?) = conversationManagerDelegate.saveLastActiveConversationId(context, id)
     fun saveMessagesForConversation(context: Context, conversationId: String, messages: List<ChatMessage>) =
         conversationManagerDelegate.saveMessagesForConversation(context, conversationId, messages, viewModelScope)
     fun loadMessagesForConversation(context: Context, conversationId: String): List<ChatMessage> =
         conversationManagerDelegate.loadMessagesForConversation(context, conversationId)
-    fun loadConversationHistory(context: Context) =
+    fun loadConversationHistory(context: Context) {
         conversationManagerDelegate.loadConversationHistory(
             context = context,
             onWorkspaceChange = { setWorkspacePath(context, it) },
             onMessagesLoaded = { mutableChatMessages.value = it }
         )
+        // Restore the CLI/ACP session ids before the first resumed turn.
+        convIdToCliSessionId.putAll(ConversationPersistence.loadCliSessionMapping(context))
+    }
     fun startNewConversation(context: Context? = null, projectPath: String? = workspacePath.value) =
         conversationManagerDelegate.startNewConversation(
             context = context,
@@ -796,7 +850,10 @@ class AntigravityViewModel : ViewModel() {
                 mutableAttachedFiles.value = emptyList()
             }
         )
-    fun loadConversation(context: Context, summary: ConversationSummary) =
+    fun loadConversation(context: Context, summary: ConversationSummary) {
+        ConversationPersistence.loadCliSessionMapping(context)[summary.id]?.let {
+            convIdToCliSessionId.putIfAbsent(summary.id, it)
+        }
         conversationManagerDelegate.loadConversation(
             context = context,
             summary = summary,
@@ -806,6 +863,7 @@ class AntigravityViewModel : ViewModel() {
             onMessagesLoaded = { mutableChatMessages.value = it },
             onLog = ::addLog
         )
+    }
     fun loadConversation(summary: ConversationSummary) =
         conversationManagerDelegate.loadConversation(
             summary = summary,
@@ -1635,10 +1693,15 @@ class AntigravityViewModel : ViewModel() {
 
         val current = mutableChatMessages.value.toMutableList()
         val userIdx = current.indexOfFirst { it.id == userMessage.id }
+        val affectedPaths = LinkedHashSet<String>()
         if (userIdx != -1) {
             var endIdx = userIdx + 1
             while (endIdx < current.size && current[endIdx].role != MessageRole.USER) {
                 endIdx++
+            }
+            // Only revert files recorded for this turn, never the whole workspace.
+            for (idx in userIdx until endIdx) {
+                current[idx].fileChanges?.files?.forEach { affectedPaths.add(it.relativePath) }
             }
             current.subList(userIdx, endIdx).clear()
             mutableChatMessages.value = current
@@ -1648,18 +1711,89 @@ class AntigravityViewModel : ViewModel() {
             }
         }
 
-        viewModelScope.launch(Dispatchers.IO) {
-            val root = File(workspacePath.value)
-            if (root.exists() && File(root, ".git").exists()) {
-                EngineExecutor.executeCommand(
-                    context,
-                    "cd '${root.absolutePath}' && (git restore --staged . 2>/dev/null || true) && (git restore . 2>/dev/null || git checkout -- . 2>/dev/null || true)"
-                ) { _, _ -> }
+        if (affectedPaths.isNotEmpty()) {
+            restoreChangedFiles(context, affectedPaths.toList()) { ok ->
+                addLog("Chat", "Undo restored ${affectedPaths.size} file(s) (success=$ok)")
             }
-            withContext(Dispatchers.Main) {
-                Toast.makeText(context, context.getString(R.string.chat_toast_prompt_undone), Toast.LENGTH_SHORT).show()
-            }
+        } else {
+            addLog("Chat", "Undo: no per-turn file changes recorded, skipping git restore")
         }
+        Toast.makeText(context, context.getString(R.string.chat_toast_prompt_undone), Toast.LENGTH_SHORT).show()
+    }
+
+    /** Accept (stage) the selected changed paths only. */
+    fun acceptChangedFiles(context: Context, paths: List<String>, onComplete: (Boolean) -> Unit = {}) =
+        launchChangeAction(context, paths, GitChangeAction.ACCEPT, onComplete)
+
+    /** Stage the selected changed paths without changing the workspace-wide index. */
+    fun stageChangedFiles(context: Context, paths: List<String>, onComplete: (Boolean) -> Unit = {}) =
+        launchChangeAction(context, paths, GitChangeAction.STAGE, onComplete)
+
+    /** Discard staged + working-tree changes (or remove untracked files) for selected paths only. */
+    fun rejectChangedFiles(context: Context, paths: List<String>, onComplete: (Boolean) -> Unit = {}) =
+        launchChangeAction(context, paths, GitChangeAction.RESTORE, onComplete)
+
+    /** Targeted restore used by undo; safe to call with paths from a single turn. */
+    fun restoreChangedFiles(context: Context, paths: List<String>, onComplete: (Boolean) -> Unit = {}) =
+        launchChangeAction(context, paths, GitChangeAction.RESTORE, onComplete)
+
+    private fun launchChangeAction(
+        context: Context,
+        paths: List<String>,
+        action: GitChangeAction,
+        onComplete: (Boolean) -> Unit
+    ) {
+        val safePaths = sanitizeChangePaths(paths)
+        if (safePaths.isEmpty()) {
+            onComplete(false)
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val ok = applyGitChange(context, safePaths, action)
+            withContext(Dispatchers.Main) { onComplete(ok) }
+        }
+    }
+
+    private fun sanitizeChangePaths(paths: List<String>): List<String> =
+        paths.map { it.trim().replace('\\', '/') }
+            .filter {
+                it.isNotEmpty() && !it.startsWith("/") && !it.contains("..") &&
+                    !it.contains('\n') && !it.contains('\r')
+            }
+            .distinct()
+
+    private fun shellQuote(value: String): String = "'" + value.replace("'", "'\\''") + "'"
+
+    private suspend fun applyGitChange(
+        context: Context,
+        paths: List<String>,
+        action: GitChangeAction
+    ): Boolean {
+        val root = File(workspacePath.value)
+        if (!root.exists() || !root.isDirectory || !File(root, ".git").exists()) {
+            addLog("Changes", "Workspace is not a git repository; skipping targeted change action", isError = true)
+            return false
+        }
+        val script = when (action) {
+            GitChangeAction.ACCEPT, GitChangeAction.STAGE ->
+                paths.joinToString(" && ") { "git add -- ${shellQuote(it)}" }
+            GitChangeAction.RESTORE ->
+                paths.joinToString(" && ") { path ->
+                    val q = shellQuote(path)
+                    "(git restore --staged -- $q 2>/dev/null || true) && " +
+                        "(git ls-files --error-unmatch -- $q >/dev/null 2>&1 " +
+                        "&& (git restore -- $q 2>/dev/null || git checkout -- $q 2>/dev/null || true) " +
+                        "|| (rm -f -- $q 2>/dev/null || true))"
+                }
+        }
+        val exitCode = EngineExecutor.executeCommand(
+            context,
+            "cd ${shellQuote(root.absolutePath)} && $script"
+        ) { line, isErr ->
+            if (isErr && line.isNotBlank()) addLog("Changes", line.trim(), isError = true)
+        }
+        addLog("Changes", "${action.name.lowercase()} ${paths.size} file(s) (exit=$exitCode)")
+        return exitCode == 0
     }
 
     private fun executeAiTurn(
@@ -1770,6 +1904,9 @@ class AntigravityViewModel : ViewModel() {
                     val rawCliId = selectedModelCliId.value?.trim().orEmpty()
                     val cliId = AgyModelsService.cleanModelId(rawCliId)
                     val priorCliSession = convIdToCliSessionId[convId]
+                        ?: ConversationPersistence.loadCliSessionMapping(context)[convId].also { restored ->
+                            if (!restored.isNullOrBlank()) convIdToCliSessionId[convId] = restored
+                        }
 
                     addLog("Agent", "Turn started: prompt='${prompt.take(120)}', attachments=${attachments.size}, model='${cliId.ifEmpty { "default" }}'")
                     TerminalSessionManager.ensureAgyLiveSession(autoSwitch = false)
@@ -1806,7 +1943,8 @@ class AntigravityViewModel : ViewModel() {
 
                         val args = mutableListOf<String>()
                         val currentSec = securityPreset.value.lowercase()
-                        args.add("--dangerously-skip-permissions")
+                        // Default is true (Settings' skipPermissions), preserving existing behavior.
+                        if (skipPermissions.value) args.add("--dangerously-skip-permissions")
                         if (currentSec == "request review" || currentSec == "request_review") {
                             args.add("--mode")
                             args.add("plan")
@@ -1879,6 +2017,7 @@ class AntigravityViewModel : ViewModel() {
                                 if (detectedConv.isNotBlank() && activeCliConvId != detectedConv) {
                                     activeCliConvId = detectedConv
                                     convIdToCliSessionId[convId] = detectedConv
+                                    ConversationPersistence.saveCliSessionMapping(context, convId, detectedConv)
                                     addLog("Agent", "Linked conversation session: $detectedConv")
                                 }
 
@@ -2286,6 +2425,7 @@ class AntigravityViewModel : ViewModel() {
                                 cliModelId = cliId.ifBlank { null },
                                 sessionToResume = sessionToResume,
                                 workingDir = validWsDir,
+                                skipPermissions = skipPermissions.value,
                                 onOutputLine = onAgyLine
                             ).let { acpCode ->
                                 if (acpCode == EngineExecutor.ACP_UNAVAILABLE) {

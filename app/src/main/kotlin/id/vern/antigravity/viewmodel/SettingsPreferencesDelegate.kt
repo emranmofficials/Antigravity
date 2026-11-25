@@ -76,6 +76,9 @@ class SettingsPreferencesDelegate {
     private val mutableSkipPermissions = MutableStateFlow(true)
     val skipPermissions: StateFlow<Boolean> = mutableSkipPermissions.asStateFlow()
 
+    private val mutableStartOnBoot = MutableStateFlow(false)
+    val startOnBoot: StateFlow<Boolean> = mutableStartOnBoot.asStateFlow()
+
     private val mutableQueuedMessagesMode = MutableStateFlow("Queue")
     val queuedMessagesMode: StateFlow<String> = mutableQueuedMessagesMode.asStateFlow()
 
@@ -129,6 +132,7 @@ class SettingsPreferencesDelegate {
         val planReview = prefs.getString(AntigravityViewModel.KEY_PLAN_REVIEW_POLICY, "Always Ask") ?: "Always Ask"
         val browserJs = prefs.getString(AntigravityViewModel.KEY_BROWSER_JS_POLICY, "Request Review") ?: "Request Review"
         val creditOverages = prefs.getBoolean(AntigravityViewModel.KEY_ENABLE_CREDIT_OVERAGES, false)
+        val startOnBoot = prefs.getBoolean("ag_start_on_boot", false)
 
         mutableAppearanceConfig.value = AppearanceConfig(
             themeMode = themeMode,
@@ -168,6 +172,7 @@ class SettingsPreferencesDelegate {
         mutablePlanReviewPolicy.value = planReview
         mutableBrowserJsPolicy.value = browserJs
         mutableEnableCreditOverages.value = creditOverages
+        mutableStartOnBoot.value = startOnBoot
 
         if (!savedWorkspace.isNullOrBlank() && File(savedWorkspace).exists()) {
             onWorkspaceLoaded(savedWorkspace)
@@ -326,6 +331,12 @@ class SettingsPreferencesDelegate {
         mutableSkipPermissions.value = skip
         val prefs = context.getSharedPreferences(AntigravityViewModel.PREFS_NAME, Context.MODE_PRIVATE)
         prefs.edit().putBoolean(AntigravityViewModel.KEY_SKIP_PERMISSIONS, skip).apply()
+    }
+
+    fun setStartOnBoot(context: Context, enabled: Boolean) {
+        mutableStartOnBoot.value = enabled
+        val prefs = context.getSharedPreferences(AntigravityViewModel.PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putBoolean("ag_start_on_boot", enabled).apply()
     }
 
     fun setQueuedMessagesMode(context: Context, mode: String, onLog: (String, String) -> Unit) {

@@ -95,6 +95,9 @@ fun WorkspaceScreen(
 
     val openTabs by viewModel.openEditorTabs.collectAsStateWithLifecycle()
     val activeTabId by viewModel.activeEditorTabId.collectAsStateWithLifecycle()
+    val editorWordWrap by viewModel.editorWordWrap.collectAsStateWithLifecycle()
+    val editorLineNumbers by viewModel.editorLineNumbers.collectAsStateWithLifecycle()
+    val editorFontSize by viewModel.editorFontSize.collectAsStateWithLifecycle()
 
     val rootDir = remember {
         val docs = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS)
@@ -216,7 +219,11 @@ fun WorkspaceScreen(
                                     },
                                     onToggleDiff = {
                                         viewModel.setEditorTabDiffView(activeTab.id, true)
-                                    }
+                                    },
+                                    fontSize = editorFontSize.toFloat(),
+                                    wordWrap = editorWordWrap,
+                                    lineNumbers = editorLineNumbers,
+                                    onContentChanged = { content -> viewModel.updateEditorContent(activeTab.id, content) }
                                 )
                             }
                         } else {
@@ -454,7 +461,11 @@ fun WorkspaceScreen(
                                             },
                                             onToggleDiff = {
                                                 viewModel.setEditorTabDiffView(activeTab.id, true)
-                                            }
+                                            },
+                                            fontSize = editorFontSize.toFloat(),
+                                            wordWrap = editorWordWrap,
+                                            lineNumbers = editorLineNumbers,
+                                            onContentChanged = { content -> viewModel.updateEditorContent(activeTab.id, content) }
                                         )
                                     }
                                 } else {

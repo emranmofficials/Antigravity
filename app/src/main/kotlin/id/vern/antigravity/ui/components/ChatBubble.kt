@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -47,6 +48,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.Description
@@ -56,6 +60,9 @@ import androidx.compose.ui.layout.ContentScale
 import coil.compose.AsyncImage
 import java.io.File
 import androidx.compose.material3.BasicAlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -64,6 +71,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -94,6 +102,7 @@ import id.vern.antigravity.data.TurnFileChanges
 import id.vern.antigravity.ui.theme.AntigravityAmber
 import id.vern.antigravity.ui.theme.AntigravityBlue
 import id.vern.antigravity.ui.theme.AntigravityRed
+import id.vern.antigravity.viewmodel.ChangeReviewActions
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -105,7 +114,10 @@ fun ChatBubble(
     onOpenTerminal: (String) -> Unit = {},
     onUndoPrompt: (ChatMessage) -> Unit = {},
     isPinnedExecuting: Boolean = false,
-    isExecuting: Boolean = false
+    isExecuting: Boolean = false,
+    onAcceptFiles: (List<String>) -> Unit = { ChangeReviewActions.accept(it) },
+    onStageFiles: (List<String>) -> Unit = { ChangeReviewActions.stage(it) },
+    onRejectFiles: (List<String>) -> Unit = { ChangeReviewActions.reject(it) }
 ) {
     val context = LocalContext.current
     val isUser = message.role == MessageRole.USER
@@ -836,7 +848,10 @@ fun ChatBubble(
             if (showReviewDialog && fileChanges != null) {
                 ReviewChangesDialog(
                     fileChanges = fileChanges,
-                    onDismissRequest = { showReviewDialog = false }
+                    onDismissRequest = { showReviewDialog = false },
+                    onAcceptFiles = onAcceptFiles,
+                    onStageFiles = onStageFiles,
+                    onRejectFiles = onRejectFiles
                 )
             }
         }
@@ -847,8 +862,44 @@ fun ChatBubble(
 @Composable
 fun ReviewChangesDialog(
     fileChanges: TurnFileChanges,
-    onDismissRequest: () -> Unit
+    onDismissRequest: () -> Unit,
+    onAcceptFiles: (List<String>) -> Unit = { ChangeReviewActions.accept(it) },
+    onStageFiles: (List<String>) -> Unit = { ChangeReviewActions.stage(it) },
+    onRejectFiles: (List<String>) -> Unit = { ChangeReviewActions.reject(it) }
 ) {
+    var selectedPaths by remember(fileChanges) { mutableStateOf<Set<String>>(emptySet()) }
+    var dismissedPaths by remember(fileChanges) { mutableStateOf<Set<String>>(emptySet()) }
+    var acceptedPaths by remember(fileChanges) { mutableStateOf<Set<String>>(emptySet()) }
+    var pendingDiscard by remember(fileChanges) { mutableStateOf<List<String>?>(null) }
+    val visibleFiles = remember(fileChanges, dismissedPaths) {
+        fileChanges.files.filterNot { it.relativePath in dismissedPaths }
+    }
+
+    fun runAccept(paths: List<String>) {
+        if (paths.isEmpty()) return
+        onAcceptFiles(paths)
+        acceptedPaths = acceptedPaths + paths
+    }
+
+    fun runStage(paths: List<String>) {
+        if (paths.isEmpty()) return
+        onStageFiles(paths)
+    }
+
+    fun runDiscard(paths: List<String>) {
+        if (paths.isEmpty()) return
+        pendingDiscard = paths
+    }
+
+    fun confirmDiscard() {
+        val paths = pendingDiscard ?: return
+        onRejectFiles(paths)
+        dismissedPaths = dismissedPaths + paths
+        selectedPaths = selectedPaths - paths
+        acceptedPaths = acceptedPaths - paths
+        pendingDiscard = null
+    }
+
     BasicAlertDialog(
         onDismissRequest = onDismissRequest,
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -871,6 +922,14 @@ fun ReviewChangesDialog(
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 14.dp)
                 ) {
+                    Checkbox(
+                        checked = visibleFiles.isNotEmpty() &&
+                            visibleFiles.all { it.relativePath in selectedPaths },
+                        onCheckedChange = { checked ->
+                            selectedPaths = if (checked) visibleFiles.map { it.relativePath }.toSet() else emptySet()
+                        }
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = stringResource(R.string.chat_review_changes_title),
@@ -899,7 +958,7 @@ fun ReviewChangesDialog(
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(fileChanges.files, key = { it.relativePath }) { file ->
+                    items(visibleFiles, key = { it.relativePath }) { file ->
                         var isDiffOpen by remember { mutableStateOf(false) }
                         val diffRotation by animateFloatAsState(
                             targetValue = if (isDiffOpen) 0f else -90f,
@@ -922,6 +981,17 @@ fun ReviewChangesDialog(
                                         .clickable { isDiffOpen = !isDiffOpen }
                                         .padding(horizontal = 12.dp, vertical = 10.dp)
                                 ) {
+                                    Checkbox(
+                                        checked = file.relativePath in selectedPaths,
+                                        onCheckedChange = { checked ->
+                                            selectedPaths = if (checked) {
+                                                selectedPaths + file.relativePath
+                                            } else {
+                                                selectedPaths - file.relativePath
+                                            }
+                                        }
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
                                     FileBadge(fileName = file.name)
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Column(modifier = Modifier.weight(1f)) {
@@ -996,6 +1066,45 @@ fun ReviewChangesDialog(
                                     )
                                 }
 
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp)
+                                ) {
+                                    TextButton(
+                                        onClick = { runAccept(listOf(file.relativePath)) },
+                                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
+                                    ) {
+                                        Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(12.dp))
+                                        Spacer(modifier = Modifier.width(3.dp))
+                                        Text(stringResource(R.string.review_accept), fontSize = 10.sp)
+                                    }
+                                    TextButton(
+                                        onClick = { runStage(listOf(file.relativePath)) },
+                                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
+                                    ) {
+                                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(12.dp))
+                                        Spacer(modifier = Modifier.width(3.dp))
+                                        Text(stringResource(R.string.review_stage), fontSize = 10.sp)
+                                    }
+                                    TextButton(
+                                        onClick = { runDiscard(listOf(file.relativePath)) },
+                                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
+                                    ) {
+                                        Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(12.dp))
+                                        Spacer(modifier = Modifier.width(3.dp))
+                                        Text(stringResource(R.string.review_discard), fontSize = 10.sp)
+                                    }
+                                    if (file.relativePath in acceptedPaths) {
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            text = stringResource(R.string.review_accepted),
+                                            color = Color(0xFF4CAF50),
+                                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp)
+                                        )
+                                    }
+                                }
+
                                 AnimatedVisibility(
                                     visible = isDiffOpen,
                                     enter = expandVertically(animationSpec = tween(250)) + fadeIn(tween(200)),
@@ -1017,22 +1126,22 @@ fun ReviewChangesDialog(
                                                     .padding(horizontal = 10.dp, vertical = 8.dp)
                                             ) {
                                                 if (file.diff.isNotBlank()) {
-                                                    file.diff.lines().forEach { diffLine ->
+                                                    val parsedDiff = remember(file.diff) {
+                                                        parseUnifiedDiff(file.diff, 600)
+                                                    }
+                                                    parsedDiff.forEach { diffLine ->
                                                         val (bgColor, textColor) = when {
-                                                            diffLine.startsWith("+") && !diffLine.startsWith("+++") -> {
-                                                                Color(0xFF14301B) to Color(0xFF81C784)
-                                                            }
-                                                            diffLine.startsWith("-") && !diffLine.startsWith("---") -> {
-                                                                Color(0xFF331618) to Color(0xFFE57373)
-                                                            }
-                                                            diffLine.startsWith("@@") -> {
+                                                            diffLine.text.startsWith("@@") ->
                                                                 Color(0xFF1E2838) to Color(0xFF64B5F6)
-                                                            }
+                                                            diffLine.type == DiffLineType.ADDED ->
+                                                                Color(0xFF14301B) to Color(0xFF81C784)
+                                                            diffLine.type == DiffLineType.REMOVED ->
+                                                                Color(0xFF331618) to Color(0xFFE57373)
                                                             else -> Color.Transparent to Color(0xFFD4D4D4)
                                                         }
 
                                                         Text(
-                                                            text = diffLine,
+                                                            text = diffLine.text,
                                                             fontFamily = FontFamily.Monospace,
                                                             fontSize = 11.sp,
                                                             color = textColor,
@@ -1057,6 +1166,78 @@ fun ReviewChangesDialog(
                                 }
                             }
                         }
+                    }
+                }
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)
+                ) {
+                    Text(
+                        text = "${selectedPaths.size} selected",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(
+                        onClick = { selectedPaths = emptySet() },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                    ) { Text("Clear", fontSize = 11.sp) }
+                    TextButton(
+                        onClick = { runStage(selectedPaths.toList()) },
+                        enabled = selectedPaths.isNotEmpty(),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                    ) { Text(stringResource(R.string.review_stage), fontSize = 11.sp) }
+                    TextButton(
+                        onClick = { runAccept(selectedPaths.toList()) },
+                        enabled = selectedPaths.isNotEmpty(),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                    ) { Text(stringResource(R.string.review_accept), fontSize = 11.sp) }
+                    TextButton(
+                        onClick = { runDiscard(selectedPaths.toList()) },
+                        enabled = selectedPaths.isNotEmpty(),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                    ) { Text(stringResource(R.string.review_discard), fontSize = 11.sp) }
+                }
+            }
+        }
+    }
+
+    val discardTargets = pendingDiscard
+    if (discardTargets != null) {
+        BasicAlertDialog(onDismissRequest = { pendingDiscard = null }) {
+            DialogBlurEffect()
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                tonalElevation = 6.dp,
+                modifier = Modifier.padding(20.dp)
+            ) {
+                Column(modifier = Modifier.padding(20.dp)) {
+                    Text(
+                        text = stringResource(R.string.review_discard_title),
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "This restores ${discardTargets.size} file(s) in the workspace. This cannot be undone.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Row(
+                        horizontalArrangement = Arrangement.End,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        TextButton(onClick = { pendingDiscard = null }) { Text("Cancel") }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(
+                            onClick = { confirmDiscard() },
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                        ) { Text(stringResource(R.string.review_discard)) }
                     }
                 }
             }

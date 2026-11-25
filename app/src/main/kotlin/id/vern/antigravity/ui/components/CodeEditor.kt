@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -127,11 +128,21 @@ fun CodeEditor(
     onSaveFile: (File, String) -> Unit,
     onCloseTab: () -> Unit,
     onToggleDiff: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    fontSize: Float = 12f,
+    wordWrap: Boolean = true,
+    lineNumbers: Boolean = true,
+    onContentChanged: ((String) -> Unit)? = null
 ) {
     var textContent by remember(tab.id) { mutableStateOf(tab.content) }
     var history by remember(tab.id) { mutableStateOf(listOf(tab.content)) }
     var historyIndex by remember(tab.id) { mutableStateOf(0) }
+
+    // All editor type is derived from the single preference value (12f keeps the old look).
+    val codeFontSize = fontSize.coerceIn(8f, 32f)
+    val codeTextSize = codeFontSize.sp
+    val codeLineHeight = (codeFontSize * 1.5f).sp
+    val chromeTextSize = (codeFontSize - 1f).coerceAtLeast(8f).sp
 
     val ext = tab.file.extension.lowercase()
     val isMarkdown = ext in listOf("md", "markdown")
@@ -214,7 +225,7 @@ fun CodeEditor(
                             Text(
                                 text = "●",
                                 color = AntigravityAmber,
-                                fontSize = 12.sp
+                                fontSize = codeTextSize
                             )
                         }
                     }
@@ -250,7 +261,7 @@ fun CodeEditor(
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
                                 text = if (isPreviewMode) stringResource(R.string.editor_mode_raw) else stringResource(R.string.editor_mode_preview),
-                                fontSize = 11.sp,
+                                fontSize = chromeTextSize,
                                 fontWeight = FontWeight.Bold
                             )
                         }
@@ -276,6 +287,7 @@ fun CodeEditor(
                                 if (historyIndex > 0) {
                                     historyIndex--
                                     textContent = history[historyIndex]
+                                    onContentChanged?.invoke(textContent)
                                 }
                             },
                             enabled = historyIndex > 0,
@@ -293,6 +305,7 @@ fun CodeEditor(
                                 if (historyIndex < history.size - 1) {
                                     historyIndex++
                                     textContent = history[historyIndex]
+                                    onContentChanged?.invoke(textContent)
                                 }
                             },
                             enabled = historyIndex < history.size - 1,
@@ -326,7 +339,7 @@ fun CodeEditor(
                             modifier = Modifier.size(13.dp)
                         )
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text(stringResource(R.string.editor_btn_save), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text(stringResource(R.string.editor_btn_save), fontSize = chromeTextSize, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -578,45 +591,49 @@ fun CodeEditor(
                     }
                 }
             } else {
+                val gutterWidth = (44f * codeFontSize / 12f).dp
                 Row(
                     modifier = Modifier
                         .fillMaxSize()
                         .background(Color(0xFF0D1117))
                 ) {
-                    Column(
-                        modifier = Modifier
-                            .width(44.dp)
-                            .fillMaxHeight()
-                            .verticalScroll(vScroll)
-                            .background(Color(0xFF161B22))
-                            .padding(vertical = 8.dp),
-                        horizontalAlignment = Alignment.End
-                    ) {
-                        Text(
-                            text = lineNumbersText,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 12.sp,
-                            color = Color(0xFF6E7681),
-                            lineHeight = 18.sp,
-                            textAlign = TextAlign.End,
-                            modifier = Modifier.fillMaxWidth().padding(end = 4.dp)
-                        )
-                    }
+                    if (lineNumbers) {
+                        Column(
+                            modifier = Modifier
+                                .width(gutterWidth)
+                                .fillMaxHeight()
+                                .verticalScroll(vScroll)
+                                .background(Color(0xFF161B22))
+                                .padding(vertical = 8.dp),
+                            horizontalAlignment = Alignment.End
+                        ) {
+                            Text(
+                                text = lineNumbersText,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = codeTextSize,
+                                color = Color(0xFF6E7681),
+                                lineHeight = codeLineHeight,
+                                textAlign = TextAlign.End,
+                                modifier = Modifier.fillMaxWidth().padding(end = 4.dp)
+                            )
+                        }
 
-                    Spacer(modifier = Modifier.width(8.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                    }
 
                     Box(
                         modifier = Modifier
                             .weight(1f)
                             .fillMaxHeight()
                             .verticalScroll(vScroll)
-                            .horizontalScroll(hScroll)
+                            .then(if (wordWrap) Modifier else Modifier.horizontalScroll(hScroll))
                             .padding(vertical = 8.dp)
                     ) {
                         BasicTextField(
                             value = textContent,
                             onValueChange = { newText ->
                                 textContent = newText
+                                onContentChanged?.invoke(newText)
                                 if (history.isEmpty() || history.last() != newText) {
                                     history = history.take(historyIndex + 1) + newText
                                     historyIndex = history.size - 1
@@ -624,13 +641,17 @@ fun CodeEditor(
                             },
                             textStyle = TextStyle(
                                 fontFamily = FontFamily.Monospace,
-                                fontSize = 12.sp,
+                                fontSize = codeTextSize,
                                 color = Color(0xFFE6EDF3),
-                                lineHeight = 18.sp
+                                lineHeight = codeLineHeight
                             ),
                             visualTransformation = SyntaxHighlighterTransformation(tab.file.extension),
                             cursorBrush = SolidColor(AntigravityBlue),
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = if (wordWrap) {
+                                Modifier.fillMaxWidth()
+                            } else {
+                                Modifier.wrapContentWidth(align = Alignment.Start, unbounded = true)
+                            }
                         )
                     }
                 }
@@ -661,12 +682,13 @@ fun CodeEditor(
                             modifier = Modifier.clickable {
                                 val insertion = if (sym == "Tab") "    " else sym
                                 textContent += insertion
+                                onContentChanged?.invoke(textContent)
                             }
                         ) {
                             Text(
                                 text = sym,
                                 fontFamily = FontFamily.Monospace,
-                                fontSize = 12.sp,
+                                fontSize = codeTextSize,
                                 fontWeight = FontWeight.Bold,
                                 color = Color(0xFFC9D1D9),
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)

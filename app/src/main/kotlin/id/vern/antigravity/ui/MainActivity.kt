@@ -1,6 +1,8 @@
 package id.vern.antigravity.ui
 
+import android.content.Intent
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -16,6 +18,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -29,7 +32,11 @@ import id.vern.antigravity.util.UpdateChecker
 import id.vern.antigravity.ui.screens.SplashScreen
 import id.vern.antigravity.ui.screens.WorkspaceScreen
 import id.vern.antigravity.ui.theme.AntigravityTheme
+import id.vern.antigravity.viewmodel.AuthDelegate
 import id.vern.antigravity.viewmodel.AntigravityViewModel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 enum class AppDestination {
     SPLASH,
@@ -40,9 +47,14 @@ class MainActivity : ComponentActivity() {
 
     private val viewModel: AntigravityViewModel by viewModels()
 
+    private val mutableDeepLinkDestination = MutableStateFlow<AppDestination?>(null)
+    /** Destination requested by an incoming antigravity:// link. */
+    val deepLinkDestination: StateFlow<AppDestination?> = mutableDeepLinkDestination.asStateFlow()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         viewModel.loadPreferences(this)
+        handleIncomingIntent(intent)
         enableEdgeToEdge()
 
         setContent {
@@ -67,6 +79,13 @@ class MainActivity : ComponentActivity() {
             ) {
                 val startDestination = AppDestination.SPLASH
                 var currentScreen by remember { mutableStateOf(startDestination) }
+                val requestedDestination by deepLinkDestination.collectAsStateWithLifecycle()
+                LaunchedEffect(requestedDestination) {
+                    requestedDestination?.let { destination ->
+                        currentScreen = destination
+                        mutableDeepLinkDestination.value = null
+                    }
+                }
                 val isBlurActive = DialogBlurState.isBlurActive
                 val blurRadius by animateDpAsState(
                     targetValue = if (isBlurActive) 22.dp else 0.dp,
@@ -115,6 +134,40 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIncomingIntent(intent)
+    }
+
+    /** Routes antigravity:// deep links into AuthDelegate and the ViewModel. */
+    fun handleIncomingIntent(intent: Intent?) {
+        AuthDelegate.handleDeepLinkIntent(
+            intent = intent,
+            onAuthCode = { code ->
+                viewModel.addLog("DeepLink", "Received authorization code from deep link")
+                viewModel.exchangeManualAuthCode(this, code)
+            },
+            onAuthSuccess = { email ->
+                val suffix = email?.let { e -> ": $e" }.orEmpty()
+                viewModel.addLog("DeepLink", "Auth success from deep link$suffix")
+                viewModel.refreshAuthState(this)
+            },
+            onAuthError = { message ->
+                viewModel.addLog("DeepLink", "Auth error from deep link: $message", true)
+                Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+            },
+            onWorkspaceRequested = {
+                mutableDeepLinkDestination.value = AppDestination.WORKSPACE
+            },
+            onUnknownLink = { raw ->
+                if (!raw.isNullOrBlank()) {
+                    viewModel.addLog("DeepLink", "Ignored unknown deep link: $raw")
+                }
+            }
+        )
     }
 
     override fun onResume() {

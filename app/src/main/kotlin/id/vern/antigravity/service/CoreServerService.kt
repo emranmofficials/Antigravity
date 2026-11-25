@@ -28,6 +28,9 @@ class CoreServerService : Service() {
         const val ACTION_STOP = "id.vern.antigravity.action.STOP"
         const val ACTION_RESTART = "id.vern.antigravity.action.RESTART"
 
+        /** Stable action for a future boot receiver; startService(context) also works. */
+        const val ACTION_BOOT_RESTART = "id.vern.antigravity.action.BOOT_RESTART"
+
         fun startService(context: Context) {
             val intent = Intent(context, CoreServerService::class.java).apply {
                 action = ACTION_START
@@ -51,19 +54,41 @@ class CoreServerService : Service() {
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val wakeLockHolder = WakeLockHolder()
     private var gatewayServer: SystemGatewayServer? = null
+    @Volatile
+    private var daemonRunning = false
 
     inner class LocalBinder : Binder() {
         fun getService(): CoreServerService = this@CoreServerService
     }
 
+    private fun publishStatus(
+        daemon: Boolean? = null,
+        gateway: Boolean? = null,
+        wakeLock: Boolean? = null,
+        health: String? = null
+    ) {
+        val current = ServiceStatusService.status.value
+        val daemonValue = daemon ?: daemonRunning
+        val gatewayValue = gateway ?: (gatewayServer?.isRunning() == true)
+        val wakeLockValue = wakeLock ?: wakeLockHolder.isHeld
+        val healthValue = health ?: ServiceStatusService.deriveHealth(daemonValue, gatewayValue)
+        ServiceStatusService.update(daemonValue, gatewayValue, wakeLockValue, healthValue)
+        ForegroundNotification.update(this, ServiceStatusService.statusText(this))
+        if (current.health != healthValue) {
+            Log.i(TAG, "Service status: ${ServiceStatusService.currentJson()}")
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         Log.i(TAG, "Creating CoreServerService...")
+        NetworkStateService.register(this)
         ForegroundNotification.start(this, getString(R.string.notification_engine_active))
         wakeLockHolder.acquire(this, 15_000L)
 
         gatewayServer = SystemGatewayServer(this, 45161, wakeLockHolder)
         gatewayServer?.start()
+        publishStatus(gateway = gatewayServer?.isRunning() == true)
 
         startBackgroundDaemon()
         AppLogger.d("Engine", "CoreServerService running on ports 45158 & 45161")
@@ -73,18 +98,20 @@ class CoreServerService : Service() {
         when (intent?.action) {
             ACTION_STOP -> {
                 Log.i(TAG, "Stop action requested")
+                daemonRunning = false
+                publishStatus(daemon = false, gateway = false, wakeLock = false, health = "stopped")
                 dismissNotification()
                 stopSelf()
                 return START_NOT_STICKY
             }
-            ACTION_RESTART -> {
-                Log.i(TAG, "Restart action requested")
+            ACTION_RESTART, ACTION_BOOT_RESTART -> {
+                Log.i(TAG, "Restart action requested (${intent.action})")
                 stopBackgroundDaemon()
                 startBackgroundDaemon()
-                ForegroundNotification.update(this, getString(R.string.notification_engine_running))
+                publishStatus()
             }
             else -> {
-                ForegroundNotification.update(this, getString(R.string.notification_engine_running))
+                publishStatus()
             }
         }
         return START_STICKY
@@ -94,11 +121,14 @@ class CoreServerService : Service() {
 
     override fun onDestroy() {
         Log.i(TAG, "Destroying CoreServerService...")
+        daemonRunning = false
+        publishStatus(daemon = false, gateway = false, wakeLock = false, health = "stopped")
         dismissNotification()
         serviceScope.cancel()
         stopBackgroundDaemon()
         gatewayServer?.stop()
         wakeLockHolder.release()
+        NetworkStateService.unregister()
         AppLogger.d("Engine", "CoreServerService stopped")
         super.onDestroy()
     }
@@ -134,9 +164,13 @@ class CoreServerService : Service() {
                     pb.environment()["AGY_APPLICATION_ID"] = packageName
                     pb.environment()["APPLICATION_ID"] = packageName
                     pb.start()
+                    daemonRunning = true
+                    publishStatus(daemon = true)
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to launch agy-daemon: ${e.message}")
+                daemonRunning = false
+                publishStatus(daemon = false, health = ServiceStatusService.deriveHealth(false, gatewayServer?.isRunning() == true))
             }
         }
     }
@@ -155,6 +189,7 @@ class CoreServerService : Service() {
                 if (!p.waitFor(1500, TimeUnit.MILLISECONDS)) {
                     p.destroyForcibly()
                 }
+                daemonRunning = false
             }
         } catch (e: Exception) {
             Log.w(TAG, "Error stopping daemon: ${e.message}")

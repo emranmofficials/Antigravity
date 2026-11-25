@@ -486,6 +486,8 @@ object EngineExecutor {
         cliModelId: String? = null,
         sessionToResume: String? = null,
         workingDir: File? = null,
+        /** Mirrors AntigravityViewModel.skipPermissions; defaults to true to preserve behavior. */
+        skipPermissions: Boolean = true,
         onOutputLine: (String, Boolean) -> Unit
     ): Int = withContext(Dispatchers.IO) {
         healEnvironment(context)
@@ -522,9 +524,9 @@ object EngineExecutor {
             "--library-path",
             libraryPaths,
             agyBin.absolutePath,
-            "acp",
-            "--dangerously-skip-permissions"
+            "acp"
         )
+        if (skipPermissions) cmdList.add("--dangerously-skip-permissions")
         if (workingDir != null && workingDir.exists() && workingDir.isDirectory) {
             cmdList.add("--add-dir")
             cmdList.add(workingDir.absolutePath)

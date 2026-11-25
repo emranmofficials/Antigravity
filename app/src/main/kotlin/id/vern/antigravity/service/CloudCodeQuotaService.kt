@@ -11,6 +11,7 @@ import id.vern.antigravity.data.QuotaGroup
 import id.vern.antigravity.data.TierInfo
 import id.vern.antigravity.data.UserQuotaSummary
 import id.vern.antigravity.oauth.OAuthManager
+import id.vern.antigravity.util.AppLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -42,6 +43,31 @@ object CloudCodeQuotaService {
     private const val MODELS_PATH = "/v1internal:fetchAvailableModels"
     private const val TIER_PATH = "/v1internal:loadCodeAssist"
 
+    @Volatile
+    private var lastGoodQuotaSummary: UserQuotaSummary? = null
+    @Volatile
+    private var lastGoodQuotaUpdatedAt: Long = 0L
+
+    /** Timestamp of the last successful (live) quota snapshot, in epoch milliseconds. */
+    val lastUpdatedAt: Long get() = lastGoodQuotaUpdatedAt
+
+    /** Last known-good quota snapshot for offline display. */
+    val cachedQuotaSummary: UserQuotaSummary? get() = lastGoodQuotaSummary
+
+    fun rememberQuotaSummary(summary: UserQuotaSummary) {
+        lastGoodQuotaSummary = summary
+        lastGoodQuotaUpdatedAt = System.currentTimeMillis()
+    }
+
+    fun clearCachedQuotaSummary() {
+        lastGoodQuotaSummary = null
+        lastGoodQuotaUpdatedAt = 0L
+    }
+
+    /**
+     * The local Antigravity CLI serves HTTPS with a self-signed certificate on loopback.
+     * Trust-all is restricted to literal loopback URLs below; never reuse it for remote hosts.
+     */
     private val cachedSslContext: SSLContext? by lazy {
         try {
             val trustAllCerts = arrayOf<TrustManager>(object : X509ExtendedTrustManager() {
@@ -59,6 +85,41 @@ object CloudCodeQuotaService {
         } catch (e: Exception) {
             null
         }
+    }
+
+    private fun isLoopbackUrl(url: String): Boolean = try {
+        val host = URL(url).host
+        host.equals("127.0.0.1", ignoreCase = true) ||
+            host.equals("localhost", ignoreCase = true) ||
+            host == "::1" ||
+            java.net.InetAddress.getByName(host).isLoopbackAddress
+    } catch (e: Exception) {
+        false
+    }
+
+    /** Returns the relaxed SSL context only for loopback URLs. */
+    private fun loopbackSslContext(url: String): SSLContext? =
+        if (isLoopbackUrl(url)) cachedSslContext else null
+
+    /** Hostname verification is only relaxed for loopback URLs; the socket is never remote. */
+    private fun loopbackHostnameVerifier(url: String): HostnameVerifier = HostnameVerifier { hostname, session ->
+        isLoopbackUrl(url) && (
+            hostname.equals("127.0.0.1", ignoreCase = true) ||
+                hostname.equals("localhost", ignoreCase = true) ||
+                hostname == "::1" ||
+                isLoopbackUrl("https://$hostname/")
+            )
+    }
+
+    /** Prefer the bundled CA bundle; use --insecure only as a loopback-only fallback. */
+    private fun curlTlsArgs(context: Context?, url: String): Array<String> {
+        val certFile = context?.let { File(it.filesDir, "usr/etc/tls/cert.pem") }
+        if (certFile?.isFile == true) return arrayOf("--cacert", certFile.absolutePath)
+        if (isLoopbackUrl(url)) {
+            Log.w(TAG, "No local CA bundle found; using --insecure for loopback URL only")
+            return arrayOf("--insecure")
+        }
+        return emptyArray()
     }
 
     private fun persistEndpoint(port: Int, csrf: String, context: Context? = null) {
@@ -134,14 +195,15 @@ object CloudCodeQuotaService {
         var connectionRefused = false
         for (scheme in schemes) {
             try {
-                val sc = cachedSslContext
-                val allHostsValid = HostnameVerifier { hostname, session -> true }
+                val urlString = "$scheme://127.0.0.1:$port/"
+                val sc = loopbackSslContext(urlString)
+                val loopbackVerifier = loopbackHostnameVerifier(urlString)
 
-                val url = URL("$scheme://127.0.0.1:$port/")
+                val url = URL(urlString)
                 val conn = url.openConnection()
                 if (conn is HttpsURLConnection && sc != null) {
                     conn.sslSocketFactory = sc.socketFactory
-                    conn.hostnameVerifier = allHostsValid
+                    conn.hostnameVerifier = loopbackVerifier
                 }
                 conn.connectTimeout = 2500
                 conn.readTimeout = 2500
@@ -152,7 +214,7 @@ object CloudCodeQuotaService {
                 val token = tokenRegex.find(html)?.groupValues?.get(1)
                     ?: altRegex.find(html)?.groupValues?.get(1)
                 if (!token.isNullOrBlank()) {
-                    Log.i(TAG, "Discovered live CSRF token from $scheme://127.0.0.1:$port/: $token")
+                    Log.i(TAG, "Discovered live CSRF token from loopback $scheme port $port (length=${token.length})")
                     return token
                 }
             } catch (e: ConnectException) {
@@ -167,10 +229,11 @@ object CloudCodeQuotaService {
 
         try {
             val curlBin = findCurlBinary(context)
+            val url = "https://127.0.0.1:$port/"
             val process = createCurlProcessBuilder(
                 context,
-                curlBin, "-k", "-s", "--max-time", "3",
-                "https://127.0.0.1:$port/"
+                curlBin, *curlTlsArgs(context, url), "-s", "--max-time", "3",
+                url
             ).start()
             val html = process.inputStream.bufferedReader().use { it.readText() }
             process.waitFor()
@@ -179,7 +242,7 @@ object CloudCodeQuotaService {
             val token = tokenRegex.find(html)?.groupValues?.get(1)
                 ?: altRegex.find(html)?.groupValues?.get(1)
             if (!token.isNullOrBlank()) {
-                Log.i(TAG, "Discovered live CSRF token via curl from port $port: $token")
+                Log.i(TAG, "Discovered live CSRF token via curl from loopback port $port (length=${token.length})")
                 return token
             }
         } catch (e: Exception) {}
@@ -223,11 +286,10 @@ object CloudCodeQuotaService {
         return list.distinct()
     }
 
-    fun formatResetCountdown(resetTime: String?): String {
+    fun formatResetCountdown(resetTime: String?, now: Instant = Instant.now()): String {
         if (resetTime.isNullOrBlank()) return "<1 minute"
         return try {
             val target = Instant.parse(resetTime)
-            val now = Instant.now()
             val diffMs = Duration.between(now, target).toMillis()
             if (diffMs <= 0) return "<1 minute"
             val totalMins = diffMs / 60000
@@ -247,11 +309,10 @@ object CloudCodeQuotaService {
         }
     }
 
-    fun formatSubtext(resetTime: String?): String? {
+    fun formatSubtext(resetTime: String?, now: Instant = Instant.now()): String? {
         if (resetTime.isNullOrBlank()) return null
         return try {
             val target = Instant.parse(resetTime)
-            val now = Instant.now()
             val diffMs = Duration.between(now, target).toMillis()
             if (diffMs <= 0) return "Resets in <1m"
             val totalMins = diffMs / 60000
@@ -272,20 +333,37 @@ object CloudCodeQuotaService {
         }
     }
 
+    /** Pure helpers so quota bucket classification can be unit tested without Android. */
+    fun isFiveHourBucket(window: String, bucketId: String, displayName: String): Boolean =
+        window.equals("5h", ignoreCase = true) ||
+            bucketId.contains("5h", ignoreCase = true) ||
+            displayName.contains("5h", ignoreCase = true) ||
+            displayName.contains("Five Hour", ignoreCase = true)
+
+    fun isWeeklyBucket(window: String, bucketId: String, displayName: String): Boolean =
+        window.equals("weekly", ignoreCase = true) ||
+            window.contains("weekly", ignoreCase = true) ||
+            window.equals("7d", ignoreCase = true) ||
+            window.equals("168h", ignoreCase = true) ||
+            bucketId.contains("weekly", ignoreCase = true) ||
+            displayName.contains("weekly", ignoreCase = true)
+
     private fun queryLocalEndpointViaCurl(port: Int, csrf: String, rpcPath: String = "RetrieveUserQuotaSummary", requestBody: String = "{}", context: Context? = null): String? {
         return try {
             val curlBin = findCurlBinary(context)
+            val url = "https://127.0.0.1:$port/exa.language_server_pb.LanguageServerService/$rpcPath"
             val process = createCurlProcessBuilder(
                 context,
                 curlBin,
-                "-k", "-s",
+                *curlTlsArgs(context, url),
+                "-s",
                 "--max-time", "5",
                 "-X", "POST",
                 "-H", "Content-Type: application/json",
                 "-H", "x-codeium-csrf-token: $csrf",
                 "-H", "Connect-Protocol-Version: 1",
                 "-d", requestBody,
-                "https://127.0.0.1:$port/exa.language_server_pb.LanguageServerService/$rpcPath"
+                url
             ).start()
             val output = process.inputStream.bufferedReader().use { it.readText() }
             val exitCode = process.waitFor()
@@ -293,7 +371,7 @@ object CloudCodeQuotaService {
                 Log.i(TAG, "curl query succeeded for local server port $port ($rpcPath)")
                 output
             } else {
-                Log.w(TAG, "curl query failed (exit $exitCode, path $rpcPath): $output")
+                Log.w(TAG, "curl query failed (exit $exitCode, path $rpcPath): ${AppLogger.redact(output.take(300))}")
                 null
             }
         } catch (e: Exception) {
@@ -552,13 +630,11 @@ object CloudCodeQuotaService {
                         val bArr = gObj.getJSONArray("buckets")
                         val hasNon5hBucket = (0 until bArr.length()).any { idx ->
                             val candidate = bArr.optJSONObject(idx) ?: return@any false
-                            val cWin = candidate.optString("window", "")
-                            val cId = candidate.optString("bucketId", "")
-                            val cName = candidate.optString("displayName", "")
-                            !(cWin.equals("5h", ignoreCase = true) ||
-                                    cId.contains("5h", ignoreCase = true) ||
-                                    cName.contains("5h", ignoreCase = true) ||
-                                    cName.contains("Five Hour", ignoreCase = true))
+                            !isFiveHourBucket(
+                                candidate.optString("window", ""),
+                                candidate.optString("bucketId", ""),
+                                candidate.optString("displayName", "")
+                            )
                         }
                         for (j in 0 until bArr.length()) {
                             val bObj = bArr.getJSONObject(j)
@@ -571,16 +647,8 @@ object CloudCodeQuotaService {
                             val bDis = bObj.optBoolean("disabled", false)
                             val bSub = formatSubtext(bReset)
 
-                            val is5h = bWin.equals("5h", ignoreCase = true) ||
-                                    bId.contains("5h", ignoreCase = true) ||
-                                    bName.contains("5h", ignoreCase = true) ||
-                                    bName.contains("Five Hour", ignoreCase = true)
-                            val isWeekly = bWin.equals("weekly", ignoreCase = true) ||
-                                    bWin.contains("weekly", ignoreCase = true) ||
-                                    bWin.equals("7d", ignoreCase = true) ||
-                                    bWin.equals("168h", ignoreCase = true) ||
-                                    bId.contains("weekly", ignoreCase = true) ||
-                                    bName.contains("weekly", ignoreCase = true)
+                            val is5h = isFiveHourBucket(bWin, bId, bName)
+                            val isWeekly = isWeeklyBucket(bWin, bId, bName)
 
                             val isBucketArgon = isArgon || bId.contains("argon", ignoreCase = true) || bName.contains("argon", ignoreCase = true)
                             if (isBucketArgon) {
@@ -828,15 +896,16 @@ object CloudCodeQuotaService {
             var respStr: String? = null
             var modelsRespStr: String? = null
 
-            val sc = cachedSslContext
-            val allHostsValid = HostnameVerifier { hostname, session -> true }
+            val loopbackUrl = "https://127.0.0.1:$port/"
+            val sc = loopbackSslContext(loopbackUrl)
+            val loopbackVerifier = loopbackHostnameVerifier(loopbackUrl)
 
             try {
                 if (sc != null) {
                     val url = URL("https://127.0.0.1:$port/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary")
                     val conn = url.openConnection() as HttpsURLConnection
                     conn.sslSocketFactory = sc.socketFactory
-                    conn.hostnameVerifier = allHostsValid
+                    conn.hostnameVerifier = loopbackVerifier
                     conn.requestMethod = "POST"
                     conn.doOutput = true
                     conn.connectTimeout = 4000
@@ -877,7 +946,7 @@ object CloudCodeQuotaService {
                         val urlM = URL("https://127.0.0.1:$port/exa.language_server_pb.LanguageServerService/GetAvailableModels")
                         val connM = urlM.openConnection() as HttpsURLConnection
                         connM.sslSocketFactory = sc.socketFactory
-                        connM.hostnameVerifier = allHostsValid
+                        connM.hostnameVerifier = loopbackVerifier
                         connM.requestMethod = "POST"
                         connM.doOutput = true
                         connM.connectTimeout = 4000
@@ -961,7 +1030,7 @@ object CloudCodeQuotaService {
             conn.inputStream.bufferedReader().use { it.readText() }
         } else {
             val err = conn.errorStream?.bufferedReader()?.use { it.readText() } ?: "HTTP $code"
-            Log.w(TAG, "Request to $urlStr failed ($code): $err")
+            Log.w(TAG, "Request to $urlStr failed ($code): ${AppLogger.redact(err.take(300))}")
             null
         }
     }
@@ -970,11 +1039,12 @@ object CloudCodeQuotaService {
         val candidates = getCandidateEndpoints(context)
         for ((port, csrf) in candidates) {
             try {
-                val sc = cachedSslContext ?: continue
-                val url = URL("https://127.0.0.1:$port/exa.language_server_pb.LanguageServerService/Restart")
+                val loopbackUrl = "https://127.0.0.1:$port/"
+                val sc = loopbackSslContext(loopbackUrl) ?: continue
+                val url = URL("${loopbackUrl}exa.language_server_pb.LanguageServerService/Restart")
                 val conn = url.openConnection() as HttpsURLConnection
                 conn.sslSocketFactory = sc.socketFactory
-                conn.hostnameVerifier = HostnameVerifier { hostname, session -> true }
+                conn.hostnameVerifier = loopbackHostnameVerifier(loopbackUrl)
                 conn.requestMethod = "POST"
                 conn.doOutput = true
                 conn.connectTimeout = 3000
@@ -992,12 +1062,24 @@ object CloudCodeQuotaService {
     }
 
     suspend fun fetchQuotaSummary(context: Context, preloadedTier: CodeAssistTier? = null): UserQuotaSummary? = withContext(Dispatchers.IO) {
-        val tier = preloadedTier ?: fetchCodeAssistTier(context)
+        val online = NetworkStateService.refresh(context)
+        val tier = if (online) preloadedTier ?: fetchCodeAssistTier(context) else preloadedTier
 
         val localSummary = fetchFromLocalLanguageServer(context, tier)
         if (localSummary != null && localSummary.groups.isNotEmpty()) {
             Log.i(TAG, "Priority 1: Successfully retrieved live quota from local Language Server (${localSummary.groups.size} groups)")
+            rememberQuotaSummary(localSummary)
             return@withContext localSummary
+        }
+
+        if (!online) {
+            val cached = lastGoodQuotaSummary
+            if (cached != null) {
+                Log.i(TAG, "Offline: showing cached quota snapshot from ${lastGoodQuotaUpdatedAt}")
+            } else {
+                Log.i(TAG, "Offline: no cached quota snapshot available")
+            }
+            return@withContext cached
         }
 
         OAuthManager.refreshTokenIfNeeded(context)
@@ -1017,17 +1099,18 @@ object CloudCodeQuotaService {
                             context = context
                         )
                         if (summary != null && summary.groups.isNotEmpty()) {
-                            Log.i(TAG, "Successfully loaded live quota from $baseUrl for current token (${summary.groups.size} groups)")
+                            Log.i(TAG, "Successfully loaded live quota from $baseUrl (${summary.groups.size} groups)")
+                            rememberQuotaSummary(summary)
                             return@withContext summary
                         }
                     }
                 } catch (e: Exception) {
-                    Log.w(TAG, "Failed to load live quota from $baseUrl: ${e.message}")
+                    Log.w(TAG, "Failed to load live quota from $baseUrl: ${AppLogger.redact(e.message ?: "")}")
                 }
             }
         }
 
-        null
+        lastGoodQuotaSummary
     }
 
     suspend fun fetchCodeAssistTier(context: Context): CodeAssistTier? = withContext(Dispatchers.IO) {

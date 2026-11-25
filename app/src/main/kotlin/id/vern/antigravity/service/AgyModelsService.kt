@@ -32,6 +32,9 @@ data class CliModelsResult(
 object AgyModelsService {
     private const val TAG = "AgyModels"
     private const val QUERY_TIMEOUT_MS = 30_000L
+    private const val PREFS_NAME = "antigravity_prefs"
+    private const val PREF_KEY_MODELS_JSON = "ag_cli_models_json"
+    private const val PREF_KEY_MODELS_FETCHED_AT = "ag_cli_models_fetched_at"
     private val queryMutex = Mutex()
     @Volatile
     private var cachedModelsResult: CliModelsResult? = null
@@ -39,12 +42,26 @@ object AgyModelsService {
     private var lastQueryTimeMs: Long = 0L
     private const val CACHE_TTL_MS = 60_000L
 
+    /** Timestamp of the last-good model snapshot, in epoch milliseconds. */
+    val lastUpdatedAt: Long get() = lastQueryTimeMs
+
+    /** Last-good in-memory model list, for offline display. */
+    val cachedModels: List<CliModel> get() = cachedModelsResult?.models.orEmpty()
+
     val EFFORT_LEVELS = listOf("Low", "Medium", "High", "XHigh", "Max")
     private val EFFORT_SUFFIXES = listOf("-low", "-medium", "-high", "-xhigh", "-max")
 
     fun invalidateCache() {
         cachedModelsResult = null
         lastQueryTimeMs = 0L
+    }
+
+    private fun loadPrefsCachedModels(context: Context): Pair<List<CliModel>, Long> {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val models = decodeCliModels(prefs.getString(PREF_KEY_MODELS_JSON, null).orEmpty())
+            .filter { isRealAiModel(it.cliId, it.displayName) }
+        val fetchedAt = prefs.getLong(PREF_KEY_MODELS_FETCHED_AT, 0L)
+        return models to fetchedAt
     }
 
     fun isRealAiModel(modelId: String, displayName: String = ""): Boolean {
@@ -159,6 +176,23 @@ object AgyModelsService {
             }
         }
 
+        if (!NetworkStateService.refresh(context)) {
+            cachedModelsResult?.takeIf { it.models.isNotEmpty() }?.let { cached ->
+                Log.i(TAG, "Offline: using in-memory model snapshot from $lastQueryTimeMs")
+                return@withContext cached
+            }
+            val (prefsModels, fetchedAt) = loadPrefsCachedModels(context)
+            if (prefsModels.isNotEmpty()) {
+                val res = CliModelsResult(models = prefsModels)
+                cachedModelsResult = res
+                lastQueryTimeMs = fetchedAt.takeIf { it > 0L } ?: System.currentTimeMillis()
+                Log.i(TAG, "Offline: using ${prefsModels.size} cached models from $lastQueryTimeMs")
+                return@withContext res
+            }
+            Log.i(TAG, "Offline: no cached model snapshot available")
+            return@withContext CliModelsResult(error = "offline")
+        }
+
         queryMutex.withLock {
             val lockedNow = System.currentTimeMillis()
             if (!force) {
@@ -215,13 +249,11 @@ object AgyModelsService {
             val failResult = CliModelsResult(error = "cli-query-failed", detail = detail.ifBlank { null })
 
             if (!force) {
-                val prefsCached = decodeCliModels(
-                    context.getSharedPreferences("antigravity_prefs", Context.MODE_PRIVATE)
-                        .getString("ag_cli_models_json", null).orEmpty()
-                ).filter { isRealAiModel(it.cliId, it.displayName) }
+                val (prefsCached, fetchedAt) = loadPrefsCachedModels(context)
                 if (prefsCached.isNotEmpty()) {
                     val res = CliModelsResult(models = prefsCached)
                     cachedModelsResult = res
+                    lastQueryTimeMs = fetchedAt.takeIf { it > 0L } ?: System.currentTimeMillis()
                     return@withContext res
                 }
             }

@@ -1,6 +1,9 @@
 package id.vern.antigravity.ui.components
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
+import android.widget.Toast
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -43,6 +46,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
@@ -115,7 +119,7 @@ fun TerminalView(
     }
 
     LaunchedEffect(Unit) {
-        TerminalSessionManager.initIfNeeded()
+        TerminalSessionManager.init(context.applicationContext)
         val isAgyActive = EngineExecutor.isAgyRunning()
         if (isAgyActive) {
             TerminalSessionManager.ensureAgyLiveSession(autoSwitch = true)
@@ -200,12 +204,38 @@ fun TerminalView(
 
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     IconButton(
-                        onClick = { TerminalSessionManager.clear() },
+                        onClick = {
+                            TerminalSessionManager.clear()
+                            TerminalSessionManager.clearInput()
+                        },
                         modifier = Modifier.size(32.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.Clear,
                             contentDescription = stringResource(R.string.terminal_action_clear),
+                            tint = Color(0xFF94A3B8),
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+
+                    IconButton(
+                        onClick = {
+                            try {
+                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                                if (clipboard != null) {
+                                    clipboard.setPrimaryClip(
+                                        ClipData.newPlainText("Terminal output", TerminalSessionManager.currentOutputText())
+                                    )
+                                    Toast.makeText(context, context.getString(R.string.chat_copied), Toast.LENGTH_SHORT).show()
+                                }
+                            } catch (_: Exception) {}
+                            safeRequestFocus()
+                        },
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ContentCopy,
+                            contentDescription = "Copy output",
                             tint = Color(0xFF94A3B8),
                             modifier = Modifier.size(16.dp)
                         )

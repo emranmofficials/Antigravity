@@ -108,6 +108,9 @@ android {
     lint {
         abortOnError = false
         checkReleaseBuilds = false
+        // Lint runs as an explicit CI gate so release builds stay reproducible while
+        // pre-existing warnings are being paid down.
+        warningsAsErrors = false
     }
 
     packaging {
@@ -144,5 +147,7 @@ dependencies {
     debugImplementation(libs.compose.ui.tooling)
 
     implementation(libs.kotlinx.serialization.json)
+
+    testImplementation(libs.junit)
 }
 

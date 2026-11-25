@@ -190,6 +190,19 @@ fun ChatScreen(
     var showPluginsDialog by remember { mutableStateOf(false) }
     var settingsInitialPage by remember { mutableStateOf(SettingsPage.MAIN) }
     val listState = rememberLazyListState()
+    // True when the user is at (or close to) the newest message.
+    val isNearBottom by remember {
+        derivedStateOf {
+            val layoutInfo = listState.layoutInfo
+            val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()
+            if (lastVisible == null || layoutInfo.totalItemsCount == 0) {
+                true
+            } else {
+                val distancePx = layoutInfo.viewportEndOffset - (lastVisible.offset + lastVisible.size)
+                lastVisible.index >= layoutInfo.totalItemsCount - 2 && distancePx < 160
+            }
+        }
+    }
     val terminalReq by viewModel.openTerminalRequest.collectAsStateWithLifecycle()
 
     LaunchedEffect(terminalReq) {
@@ -426,9 +439,9 @@ fun ChatScreen(
     }
 
     LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) {
+        if (messages.isNotEmpty() && isNearBottom) {
             runCatching {
-                listState.scrollToItem(messages.size)
+                listState.animateScrollToItem(messages.size)
             }
         }
     }
@@ -439,10 +452,13 @@ fun ChatScreen(
     val lastMessageStepsCount = lastMessage?.steps?.size ?: 0
 
     LaunchedEffect(lastMessageContentLength, lastMessageThinkingLength, lastMessageStepsCount, isExecuting) {
-        if (isExecuting && messages.isNotEmpty() && !listState.isScrollInProgress) {
-            kotlinx.coroutines.delay(200)
-            runCatching {
-                listState.scrollToItem(messages.size)
+        if (isExecuting && messages.isNotEmpty() && isNearBottom && !listState.isScrollInProgress) {
+            kotlinx.coroutines.delay(120)
+            // Re-check: the user may have scrolled away while the delay was running.
+            if (isNearBottom && !listState.isScrollInProgress) {
+                runCatching {
+                    listState.scrollToItem(messages.size)
+                }
             }
         }
     }
@@ -1621,6 +1637,47 @@ fun ChatScreen(
                                 item(key = "chat_bottom_anchor") {
                                     Spacer(modifier = Modifier.height(1.dp))
                                 }
+                            }
+                        }
+                    }
+
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = messages.isNotEmpty() && !isNearBottom,
+                        enter = fadeIn() + slideInVertically(initialOffsetY = { it / 2 }),
+                        exit = fadeOut() + slideOutVertically(targetOffsetY = { it / 2 }),
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = 12.dp)
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(20.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            tonalElevation = 2.dp,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(20.dp))
+                                .clickable {
+                                    scope.launch {
+                                        runCatching {
+                                            listState.animateScrollToItem(messages.size)
+                                        }
+                                    }
+                                }
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.KeyboardArrowDown,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = stringResource(R.string.chat_jump_to_latest),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
                             }
                         }
                     }
